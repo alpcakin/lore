@@ -1,9 +1,6 @@
-mod cli;
-
 use anyhow::Result;
 use clap::Parser;
-
-use crate::cli::Cli;
+use lore::cli::Cli;
 
 fn main() -> Result<()> {
     Cli::parse().run()
