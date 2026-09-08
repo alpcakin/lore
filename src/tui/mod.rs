@@ -1,4 +1,4 @@
-//! The picker: an alternate screen on stderr, driven by key events.
+//! The picker: an alternate screen on the terminal device, driven by key events.
 
 mod app;
 mod form;
@@ -6,7 +6,7 @@ mod view;
 
 pub use app::{App, Outcome};
 
-use std::io::{self, Stderr};
+use std::fs::{File, OpenOptions};
 use std::panic;
 use std::time::Duration;
 
@@ -19,18 +19,30 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-type Screen = Terminal<CrosstermBackend<Stderr>>;
+type Screen = Terminal<CrosstermBackend<File>>;
 
 /// Runs the picker and returns what the shell should do.
-///
-/// The interface is drawn on stderr because stdout carries the chosen command
-/// back to the calling shell. Mixing the two would put escape sequences into the
-/// prompt.
 pub fn run(mut app: App) -> Result<Outcome> {
     let mut screen = enter()?;
     let outcome = event_loop(&mut screen, &mut app);
     leave(&mut screen)?;
     outcome
+}
+
+/// Opens the terminal device itself rather than drawing on an inherited stream.
+///
+/// stdout already belongs to the shell integration, which captures the chosen
+/// command from it. stderr is not a safe alternative either: a PSReadLine key
+/// handler hands the child process a redirected stderr, so drawing there goes
+/// into a pipe and the picker stays invisible while still reading keys.
+fn terminal_device() -> Result<File> {
+    let path = if cfg!(windows) { "CONOUT$" } else { "/dev/tty" };
+
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .with_context(|| format!("failed to open the terminal device ({path})"))
 }
 
 fn event_loop(screen: &mut Screen, app: &mut App) -> Result<Outcome> {
@@ -52,10 +64,10 @@ fn enter() -> Result<Screen> {
     install_panic_hook();
     enable_raw_mode().context("failed to put the terminal into raw mode")?;
 
-    let mut stderr = io::stderr();
-    execute!(stderr, EnterAlternateScreen).context("failed to open the alternate screen")?;
+    let mut device = terminal_device()?;
+    execute!(device, EnterAlternateScreen).context("failed to open the alternate screen")?;
 
-    Terminal::new(CrosstermBackend::new(stderr)).context("failed to start the terminal backend")
+    Terminal::new(CrosstermBackend::new(device)).context("failed to start the terminal backend")
 }
 
 fn leave(screen: &mut Screen) -> Result<()> {
@@ -81,7 +93,9 @@ fn drain_input() {
 /// Leaves the terminal as it was found. Safe to call more than once.
 fn restore() {
     let _ = disable_raw_mode();
-    let _ = execute!(io::stderr(), LeaveAlternateScreen);
+    if let Ok(mut device) = terminal_device() {
+        let _ = execute!(device, LeaveAlternateScreen);
+    }
 }
 
 /// A panic inside raw mode would otherwise leave the user with an unusable
