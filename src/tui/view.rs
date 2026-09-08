@@ -18,12 +18,19 @@ const SELECTED: &str = "> ";
 const UNSELECTED: &str = "  ";
 const GAP: &str = "   ";
 const ELLIPSIS: &str = "..";
+const LEADER: &str = ".";
 
 /// Width of the selection marker plus the pin or destructive marker.
 const MARKERS: usize = 4;
 
 /// Most of a row the command column may take, however wide the commands are.
 const COMMAND_CAP: usize = 60;
+
+/// Share of the commands on screen the column is sized to hold in full.
+const COMMAND_PERCENTILE: usize = 80;
+
+/// Gap width past which the blank space becomes a rail to follow.
+const LEADER_MIN: usize = 6;
 
 pub fn draw(app: &mut App, frame: &mut Frame) {
     let [query, body, footer] = Layout::vertical([
@@ -140,20 +147,25 @@ struct Columns {
 }
 
 impl Columns {
-    /// Sizes the command column to the widest command on screen rather than to a
-    /// fixed share, so a list of short commands does not waste half the row and
-    /// truncate every description for nothing.
+    /// Sizes the command column so that most commands on screen fit.
+    ///
+    /// Sizing to the longest would let one outlier hold the column open and push
+    /// every description away from its command; the outlier is truncated
+    /// instead.
     fn fit(rows: &[RowText], width: usize) -> Self {
         let room = width.saturating_sub(MARKERS);
         let cap = (room * COMMAND_CAP / 100).max(1);
-        let widest = rows
-            .iter()
-            .map(|row| row.cmd.chars().count())
-            .max()
+
+        let mut lengths: Vec<usize> = rows.iter().map(|row| row.cmd.chars().count()).collect();
+        lengths.sort_unstable();
+        let typical = lengths
+            .get(lengths.len() * COMMAND_PERCENTILE / 100)
+            .or(lengths.last())
+            .copied()
             .unwrap_or(0);
 
         Self {
-            command: widest.clamp(1, cap),
+            command: typical.clamp(1, cap),
             room,
         }
     }
@@ -196,7 +208,7 @@ fn row_line(row: &RowText, matched: &[u32], columns: Columns) -> Line<'static> {
     spans.extend(highlighted(&command, matched, base));
 
     if columns.description() > ELLIPSIS.len() && !row.desc.is_empty() {
-        spans.push(Span::raw(" ".repeat(padding)));
+        spans.push(leader(padding));
         spans.push(Span::styled(
             format!("{GAP}{}", truncate(&row.desc, columns.description())),
             dim(),
@@ -204,6 +216,20 @@ fn row_line(row: &RowText, matched: &[u32], columns: Columns) -> Line<'static> {
     }
 
     Line::from(spans)
+}
+
+/// Fills the gap between a short command and its description.
+///
+/// A wide gap of blank space makes the eye travel the row to work out which
+/// description belongs to which command. Past a certain width the gap gets a
+/// faint rail to follow instead; short gaps are left alone, since a rail on
+/// every row would be noise.
+fn leader(width: usize) -> Span<'static> {
+    if width < LEADER_MIN {
+        return Span::raw(" ".repeat(width));
+    }
+
+    Span::styled(format!(" {} ", LEADER.repeat(width - 2)), dim())
 }
 
 fn truncate(text: &str, width: usize) -> String {
