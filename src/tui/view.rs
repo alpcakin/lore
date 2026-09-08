@@ -26,8 +26,9 @@ const ELLIPSIS: &str = "..";
 /// all.
 const SELECTION: Color = Color::LightYellow;
 
-/// Width of the selection marker plus the pin or destructive marker.
-const MARKERS: usize = 4;
+/// Width of the selection marker, the pin and destructive slots, and the space
+/// separating them from the command.
+const MARKERS: usize = 5;
 
 /// Most of a row the command column may take, however wide the commands are.
 const COMMAND_CAP: usize = 60;
@@ -202,21 +203,23 @@ fn row_line(row: &RowText, matched: &[u32], columns: Columns) -> Line<'static> {
         )
     };
 
-    // A destructive command keeps its warning colour even when selected.
-    let (status, status_style) = if row.danger {
-        ("! ", Style::new().fg(Color::Red))
-    } else if row.pinned {
-        ("* ", Style::new().fg(Color::Yellow))
-    } else {
-        ("  ", Style::new())
-    };
-
+    // Pinning and danger get a slot each. Sharing one would let a preference
+    // hide a warning, and the warning is the one thing worth reading before
+    // pressing enter. Both keep their own colour when the row is selected.
     let mut spans = vec![
         Span::styled(
             if row.selected { SELECTED } else { UNSELECTED },
             command_style,
         ),
-        Span::styled(status, status_style),
+        Span::styled(
+            if row.pinned { "*" } else { " " },
+            Style::new().fg(Color::Yellow),
+        ),
+        Span::styled(
+            if row.danger { "!" } else { " " },
+            Style::new().fg(Color::Red),
+        ),
+        Span::raw(" "),
     ];
 
     let command = truncate(&row.cmd, columns.command);
@@ -423,6 +426,34 @@ mod tests {
                 span.content
             );
         }
+    }
+
+    /// A pin is a preference and danger is a warning, so one must never hide
+    /// the other.
+    #[test]
+    fn a_pinned_destructive_row_shows_both_markers() {
+        let mut entry = row(false);
+        entry.pinned = true;
+        entry.danger = true;
+
+        let drawn: String = row_line(&entry, &[], columns())
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+
+        assert!(drawn.starts_with("  *! git log"), "drawn as {drawn:?}");
+    }
+
+    #[test]
+    fn markers_hold_their_width_when_a_row_has_none() {
+        let plain: String = row_line(&row(false), &[], columns())
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+
+        assert!(plain.starts_with("     git log"), "drawn as {plain:?}");
     }
 
     #[test]
