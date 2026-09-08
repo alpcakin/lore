@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
+use std::ops::Range;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -17,6 +18,9 @@ use crate::model::{Entry, Layer, Library};
 
 /// Schema version this build understands.
 const SCHEMA_VERSION: u32 = 1;
+
+/// Top level key holding the ids a layer hides.
+const DISABLED: &str = "disabled:";
 
 /// Libraries compiled into the binary, so a fresh install opens onto a full
 /// picker without a network round trip.
@@ -109,6 +113,113 @@ fn as_list_item(entry: &NewEntry) -> Result<String> {
     }
 
     Ok(out)
+}
+
+/// Cuts an entry out of a library file, reporting whether it was there.
+///
+/// Only the lines of that one list item are removed. Reserialising the document
+/// would be simpler, but users are told to hand edit and version this file, and
+/// a round trip through the parser silently deletes their comments.
+pub fn remove(path: &Path, id: &str) -> Result<bool> {
+    let text =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+
+    let Some(block) = item_of(&text, id) else {
+        return Ok(false);
+    };
+
+    let kept: Vec<&str> = text
+        .lines()
+        .enumerate()
+        .filter(|(number, _)| !block.contains(number))
+        .map(|(_, line)| line)
+        .collect();
+
+    let mut out = kept.join("\n");
+    out.push('\n');
+    fs::write(path, out).with_context(|| format!("failed to write {}", path.display()))?;
+
+    Ok(true)
+}
+
+/// Hides an entry the user cannot delete, such as one compiled into the binary.
+pub fn disable(path: &Path, id: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+
+    let text = fs::read_to_string(path).unwrap_or_default();
+    let mut lines: Vec<String> = text.lines().map(String::from).collect();
+
+    match lines.iter().position(|line| line.trim_end() == DISABLED) {
+        Some(at) => lines.insert(at + 1, format!("  - {id}")),
+        None => {
+            if text.trim().is_empty() {
+                lines.push(format!("version: {SCHEMA_VERSION}"));
+            }
+            lines.push(DISABLED.to_string());
+            lines.push(format!("  - {id}"));
+        }
+    }
+
+    let mut out = lines.join("\n");
+    out.push('\n');
+    fs::write(path, out).with_context(|| format!("failed to write {}", path.display()))?;
+
+    Ok(())
+}
+
+/// The lines occupied by the list item that declares `id`.
+fn item_of(text: &str, id: &str) -> Option<Range<usize>> {
+    let lines: Vec<&str> = text.lines().collect();
+
+    for (number, line) in lines.iter().enumerate() {
+        if !line.trim_start().starts_with("- ") {
+            continue;
+        }
+
+        let indent = indent_of(line);
+        // The item runs until something at the same level or shallower, which
+        // covers both the next entry and the key that follows the list.
+        let end = lines
+            .iter()
+            .enumerate()
+            .skip(number + 1)
+            .find(|(_, line)| !line.trim().is_empty() && indent_of(line) <= indent)
+            .map_or(lines.len(), |(at, _)| at);
+
+        if declares(&lines[number..end], id) {
+            return Some(number..end);
+        }
+    }
+
+    None
+}
+
+fn declares(block: &[&str], id: &str) -> bool {
+    block.iter().any(|line| {
+        line.trim_start()
+            .trim_start_matches("- ")
+            .strip_prefix("id:")
+            .is_some_and(|value| unquote(value.trim()) == id)
+    })
+}
+
+fn unquote(value: &str) -> &str {
+    value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .or_else(|| {
+            value
+                .strip_prefix('\'')
+                .and_then(|value| value.strip_suffix('\''))
+        })
+        .unwrap_or(value)
+}
+
+fn indent_of(line: &str) -> usize {
+    line.len() - line.trim_start().len()
 }
 
 /// Turns a command into an id that is stable, readable and not already taken.
@@ -414,6 +525,101 @@ commands:
         let entries = load(Some(&path)).unwrap();
         let saved = entries.iter().find(|e| e.id == "user.tricky").unwrap();
         assert_eq!(saved.cmd_for(ShellFamily::Posix), Some(tricky));
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn removing_an_entry_leaves_the_rest_of_the_file_alone() {
+        let path = scratch("remove");
+        fs::write(
+            &path,
+            "# notes I wrote myself\nversion: 1\ncommands:\n  - id: keep.me\n    cmd: ls\n    desc: list\n\n  - id: drop.me\n    cmd: rm -rf /\n    desc: do not\n  - id: keep.me.too\n    cmd: pwd\n    desc: where\n",
+        )
+        .unwrap();
+
+        assert!(remove(&path, "drop.me").unwrap());
+
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# notes I wrote myself"));
+        assert!(!text.contains("drop.me"));
+        assert!(!text.contains("rm -rf"));
+
+        let entries = load(Some(&path)).unwrap();
+        let ids = ids(&entries);
+        assert!(ids.contains(&"keep.me") && ids.contains(&"keep.me.too"));
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn removing_the_last_entry_does_not_swallow_what_follows() {
+        let path = scratch("remove-last");
+        fs::write(
+            &path,
+            "version: 1\ncommands:\n  - id: drop.me\n    cmd: ls\n    desc: list\ndisabled:\n  - docker.*\n",
+        )
+        .unwrap();
+
+        assert!(remove(&path, "drop.me").unwrap());
+
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("disabled:"),
+            "lost the disabled list: {text:?}"
+        );
+        assert!(text.contains("docker.*"));
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn removing_something_that_is_not_there_reports_it() {
+        let path = scratch("remove-missing");
+        fs::write(&path, "version: 1\ncommands: []\n").unwrap();
+
+        assert!(!remove(&path, "nope").unwrap());
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn disabling_hides_a_builtin() {
+        let path = scratch("disable");
+        disable(&path, "docker.prune.all").unwrap();
+
+        let entries = load(Some(&path)).unwrap();
+        assert!(!ids(&entries).contains(&"docker.prune.all"));
+        assert_eq!(entries.len(), 19);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn disabling_twice_extends_the_existing_list() {
+        let path = scratch("disable-twice");
+        disable(&path, "docker.prune.all").unwrap();
+        disable(&path, "git.log.graph").unwrap();
+
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(text.matches("disabled:").count(), 1, "wrote {text:?}");
+
+        let entries = load(Some(&path)).unwrap();
+        assert_eq!(entries.len(), 18);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn disabling_leaves_saved_commands_in_place() {
+        let path = scratch("disable-keeps");
+        append(&path, &new_entry("user.mine", "docker ps")).unwrap();
+        disable(&path, "docker.prune.all").unwrap();
+
+        let entries = load(Some(&path)).unwrap();
+        let ids = ids(&entries);
+        assert!(ids.contains(&"user.mine"));
+        assert!(!ids.contains(&"docker.prune.all"));
 
         let _ = fs::remove_file(&path);
     }

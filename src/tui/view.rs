@@ -55,14 +55,6 @@ pub fn draw(app: &mut App, frame: &mut Frame) {
 }
 
 fn draw_query(app: &App, frame: &mut Frame, area: Rect) {
-    let matches = match app.matches() {
-        1 => "1 match ".to_string(),
-        count => format!("{count} matches "),
-    };
-    let [input, total] =
-        Layout::horizontal([Constraint::Min(1), Constraint::Length(matches.len() as u16)])
-            .areas(area);
-
     // Labelled rather than prefixed with the row marker, so it is obvious which
     // line accepts typing.
     let prompt = Line::from(vec![
@@ -70,8 +62,8 @@ fn draw_query(app: &App, frame: &mut Frame, area: Rect) {
         Span::styled(app.query(), Style::new().add_modifier(Modifier::BOLD)),
         Span::styled("_", dim()),
     ]);
-    frame.render_widget(Paragraph::new(prompt), input);
-    frame.render_widget(Paragraph::new(Span::styled(matches, dim())), total);
+
+    frame.render_widget(Paragraph::new(prompt), area);
 }
 
 fn draw_browse(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -370,7 +362,7 @@ fn draw_footer(app: &App, frame: &mut Frame, area: Rect) {
 
     let hints = match app.mode() {
         Mode::Browse => {
-            let mut hints = vec!["enter insert", "esc close", "^n new", "^p pin"];
+            let mut hints = vec!["enter insert", "esc close", "^n new", "^p pin", "^x remove"];
             if app.has_last_command() {
                 hints.insert(2, "^s save last");
             }

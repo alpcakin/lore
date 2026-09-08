@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::model::{Entry, ShellFamily};
+use crate::model::{Entry, Layer, ShellFamily};
 use crate::params;
 use crate::search::{Candidate, Ranker};
 use crate::store::definitions::{self, NewEntry};
@@ -50,6 +50,8 @@ pub struct App {
     scores: HashMap<String, Score>,
     library: PathBuf,
     last_command: Option<String>,
+    /// Entry the next ctrl+x will actually remove.
+    armed_to_remove: Option<String>,
     now: i64,
 }
 
@@ -77,6 +79,7 @@ impl App {
             scores,
             library,
             last_command,
+            armed_to_remove: None,
             now,
         };
         app.reindex();
@@ -131,6 +134,8 @@ impl App {
 
     pub fn on_key(&mut self, key: KeyEvent) -> Result<Option<Outcome>> {
         self.status = None;
+        // Any other keystroke stands the confirmation down.
+        let armed = self.armed_to_remove.take();
 
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         if control && matches!(key.code, KeyCode::Char('c')) {
@@ -138,13 +143,18 @@ impl App {
         }
 
         match &mut self.mode {
-            Mode::Browse => self.browse_key(key, control),
+            Mode::Browse => self.browse_key(key, control, armed),
             Mode::Params { .. } => self.params_key(key, control),
             Mode::Save { .. } => self.save_key(key, control),
         }
     }
 
-    fn browse_key(&mut self, key: KeyEvent, control: bool) -> Result<Option<Outcome>> {
+    fn browse_key(
+        &mut self,
+        key: KeyEvent,
+        control: bool,
+        armed: Option<String>,
+    ) -> Result<Option<Outcome>> {
         match key.code {
             KeyCode::Esc => return Ok(Some(Outcome::Cancelled)),
             KeyCode::Char('g') if control => return Ok(Some(Outcome::Cancelled)),
@@ -160,6 +170,7 @@ impl App {
             KeyCode::Char('p') if control => self.toggle_pin()?,
             KeyCode::Char('s') if control => self.begin_save_last(),
             KeyCode::Char('n') if control => self.begin_save_new(),
+            KeyCode::Char('x') if control => self.remove(armed)?,
 
             KeyCode::Char('u') if control => {
                 self.query.clear();
@@ -368,6 +379,43 @@ impl App {
         self.reindex();
         self.select_id(&id);
         self.status = Some(format!("Saved as {id}"));
+
+        Ok(())
+    }
+
+    /// Takes an entry out of the picker, asking once before it does.
+    ///
+    /// A builtin lives inside the binary and cannot be deleted, so it is added
+    /// to the user's disabled list instead. Either way it stops appearing, which
+    /// is what was asked for.
+    fn remove(&mut self, armed: Option<String>) -> Result<()> {
+        let Some(row) = self.selected_row() else {
+            return Ok(());
+        };
+        let id = row.entry.id.clone();
+        let own = row.entry.layer == Layer::User;
+
+        if armed.as_deref() != Some(id.as_str()) {
+            self.status = Some(format!("Remove {id}? ctrl+x again to confirm"));
+            self.armed_to_remove = Some(id);
+            return Ok(());
+        }
+
+        if own {
+            definitions::remove(&self.library, &id)?;
+        } else {
+            definitions::disable(&self.library, &id)?;
+        }
+        self.stats.forget(&id)?;
+
+        self.entries = definitions::load(Some(&self.library))?;
+        self.scores = self.stats.scores(self.now)?;
+        self.reindex();
+        self.status = Some(if own {
+            format!("Removed {id}")
+        } else {
+            format!("Hid {id}, listed under disabled in your library")
+        });
 
         Ok(())
     }
@@ -720,6 +768,91 @@ mod tests {
         assert!(app.selected_row().unwrap().pinned);
         app.on_key(ctrl('p')).unwrap();
         assert!(!app.selected_row().unwrap().pinned);
+    }
+
+    fn save_one(app: &mut App, description: &str) {
+        app.on_key(ctrl('s')).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        typed(app, description);
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+    }
+
+    #[test]
+    fn removing_asks_before_it_does_anything() {
+        let mut app = sample();
+        save_one(&mut app, "Scan this project");
+
+        app.on_key(ctrl('x')).unwrap();
+
+        assert!(app.status().unwrap().contains("ctrl+x again"));
+        assert!(app.rows().any(|row| row.entry.id == "user.kics-scan"));
+
+        let _ = std::fs::remove_file(&app.library);
+    }
+
+    #[test]
+    fn confirming_takes_the_entry_out_of_the_library() {
+        let mut app = sample();
+        save_one(&mut app, "Scan this project");
+
+        app.on_key(ctrl('x')).unwrap();
+        app.on_key(ctrl('x')).unwrap();
+
+        assert!(!app.rows().any(|row| row.entry.id == "user.kics-scan"));
+        let library = std::fs::read_to_string(&app.library).unwrap();
+        assert!(!library.contains("user.kics-scan"), "left {library:?}");
+
+        let _ = std::fs::remove_file(&app.library);
+    }
+
+    #[test]
+    fn any_other_key_stands_the_confirmation_down() {
+        let mut app = sample();
+        save_one(&mut app, "Scan this project");
+
+        app.on_key(ctrl('x')).unwrap();
+        app.on_key(key(KeyCode::Down)).unwrap();
+        app.on_key(key(KeyCode::Up)).unwrap();
+        app.on_key(ctrl('x')).unwrap();
+
+        // Back to asking rather than removing.
+        assert!(app.status().unwrap().contains("ctrl+x again"));
+        assert!(app.rows().any(|row| row.entry.id == "user.kics-scan"));
+
+        let _ = std::fs::remove_file(&app.library);
+    }
+
+    /// A builtin lives inside the binary, so removing it means recording that it
+    /// should stop appearing.
+    #[test]
+    fn removing_a_builtin_disables_it_instead() {
+        let mut app = sample();
+        let id = app.selected_row().unwrap().entry.id.clone();
+
+        app.on_key(ctrl('x')).unwrap();
+        app.on_key(ctrl('x')).unwrap();
+
+        assert!(app.status().unwrap().contains("disabled"));
+        let library = std::fs::read_to_string(&app.library).unwrap();
+        assert!(library.contains("disabled:"), "wrote {library:?}");
+        assert!(library.contains(&id), "wrote {library:?}");
+
+        let _ = std::fs::remove_file(&app.library);
+    }
+
+    #[test]
+    fn removing_forgets_what_was_remembered_about_the_entry() {
+        let mut app = sample();
+        save_one(&mut app, "Scan this project");
+        let id = app.selected_row().unwrap().entry.id.clone();
+
+        app.on_key(ctrl('x')).unwrap();
+        app.on_key(ctrl('x')).unwrap();
+
+        assert!(!app.stats.scores(0).unwrap().contains_key(&id));
+
+        let _ = std::fs::remove_file(&app.library);
     }
 
     #[test]
