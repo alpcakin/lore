@@ -1,11 +1,15 @@
 //! Command line surface.
 
+use std::collections::BTreeSet;
+
 use anyhow::{Result, bail};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 
 use crate::model::{Entry, ShellFamily};
+use crate::shell::{self, Shell};
+use crate::store::definitions::{self, NewEntry};
 use crate::store::stats::{self, Stats};
-use crate::store::{self, definitions};
+use crate::store::{self};
 use crate::tui::{App, Outcome};
 
 /// A command library that lives in your shell.
@@ -22,10 +26,22 @@ enum Command {
     Init { shell: Shell },
 
     /// Install the shell integration into the active shell profile.
-    Setup,
+    Setup {
+        /// Shell to set up. Detected from the environment when omitted.
+        #[arg(long)]
+        shell: Option<Shell>,
+
+        /// Do not ask before writing to a profile.
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
 
     /// Remove the shell integration from the active shell profile.
-    Uninstall,
+    Uninstall {
+        /// Shell to clean up. Detected from the environment when omitted.
+        #[arg(long)]
+        shell: Option<Shell>,
+    },
 
     /// Open the picker and print the selected command to stdout.
     Pick {
@@ -38,8 +54,18 @@ enum Command {
         last: Option<String>,
     },
 
-    /// Save a command to the user library.
-    Save { command: String },
+    /// Save a command to the user library without opening the picker.
+    Save {
+        command: String,
+
+        /// What the command is for. This is how you will find it again.
+        #[arg(long)]
+        desc: String,
+
+        /// Comma separated keywords.
+        #[arg(long)]
+        tags: Option<String>,
+    },
 
     /// List commands without opening the picker.
     List {
@@ -49,49 +75,38 @@ enum Command {
     },
 }
 
-/// Shells that lore ships a keybinding integration for.
-// Renaming `PowerShell` to satisfy `enum_variant_names` would misrepresent
-// Windows PowerShell 5.1, which is a supported target alongside PowerShell 7.
-#[allow(clippy::enum_variant_names)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub enum Shell {
-    Bash,
-    Zsh,
-    Fish,
-    #[value(name = "powershell")]
-    PowerShell,
-}
-
-impl From<Shell> for ShellFamily {
-    fn from(shell: Shell) -> Self {
-        match shell {
-            Shell::Bash | Shell::Zsh | Shell::Fish => ShellFamily::Posix,
-            Shell::PowerShell => ShellFamily::PowerShell,
-        }
-    }
-}
-
 impl Cli {
     pub fn run(self) -> Result<()> {
         match self.command {
-            Command::Init { .. } => bail!("`init` is not implemented yet"),
-            Command::Setup => bail!("`setup` is not implemented yet"),
-            Command::Uninstall => bail!("`uninstall` is not implemented yet"),
+            Command::Init { shell } => {
+                print!("{}", shell::snippet(shell));
+                Ok(())
+            }
+            Command::Setup { shell, yes } => shell::install(resolve(shell)?, yes),
+            Command::Uninstall { shell } => shell::uninstall(resolve(shell)?),
             Command::Pick { shell, last } => pick(family(shell), last),
-            Command::Save { .. } => bail!("`save` is not implemented yet"),
+            Command::Save {
+                command,
+                desc,
+                tags,
+            } => save(command, desc, tags),
             Command::List { shell } => list(family(shell)),
         }
     }
 }
 
-/// Falls back to the dialect this build most likely runs under until shell
-/// detection lands with the integration snippets.
-fn family(shell: Option<Shell>) -> ShellFamily {
-    match shell {
-        Some(shell) => shell.into(),
-        None if cfg!(windows) => ShellFamily::PowerShell,
-        None => ShellFamily::Posix,
+fn resolve(shell: Option<Shell>) -> Result<Shell> {
+    match shell.or_else(shell::detect) {
+        Some(shell) => Ok(shell),
+        None => bail!("could not tell which shell you are using, pass --shell"),
     }
+}
+
+fn family(shell: Option<Shell>) -> ShellFamily {
+    shell
+        .or_else(shell::detect)
+        .map(ShellFamily::from)
+        .unwrap_or(ShellFamily::Posix)
 }
 
 /// Opens the picker and writes the chosen command to stdout.
@@ -108,6 +123,33 @@ fn pick(family: ShellFamily, last: Option<String>) -> Result<()> {
         println!("{command}");
     }
 
+    Ok(())
+}
+
+fn save(command: String, desc: String, tags: Option<String>) -> Result<()> {
+    let library = store::user_library()?;
+    let taken: BTreeSet<String> = definitions::load(Some(&library))?
+        .into_iter()
+        .map(|entry| entry.id)
+        .collect();
+
+    let entry = NewEntry {
+        id: definitions::suggest_id(&command, &taken),
+        cmd: command,
+        desc,
+        tags: tags
+            .unwrap_or_default()
+            .split(',')
+            .map(|tag| tag.trim().to_string())
+            .filter(|tag| !tag.is_empty())
+            .collect(),
+    };
+
+    let stats = Stats::open(&store::stats_database()?)?;
+    stats.record_new(&entry.id, stats::now())?;
+    definitions::append(&library, &entry)?;
+
+    println!("Saved as {} in {}", entry.id, library.display());
     Ok(())
 }
 
