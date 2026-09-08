@@ -4,12 +4,15 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::params;
 use crate::tui::app::{App, Mode};
 use crate::tui::form::Form;
 
+// The interface stays ASCII only. A legacy Windows console runs on the
+// system code page, where box drawing characters arrive as mojibake.
+const RULE: &str = "-";
 const SELECTED: &str = "> ";
 const UNSELECTED: &str = "  ";
 
@@ -151,11 +154,15 @@ fn highlighted(text: &str, matched: &[u32], base: Style) -> Vec<Span<'static>> {
 }
 
 fn draw_detail(app: &App, frame: &mut Frame, area: Rect) {
-    let block = Block::new().borders(Borders::TOP).border_style(dim());
+    let [rule, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+    frame.render_widget(
+        Paragraph::new(Span::styled(RULE.repeat(rule.width as usize), dim())),
+        rule,
+    );
 
     let Some(row) = app.selected_row() else {
-        let empty = Paragraph::new(Span::styled("Nothing matches that query", dim())).block(block);
-        frame.render_widget(empty, area);
+        let empty = Paragraph::new(Span::styled("Nothing matches that query", dim()));
+        frame.render_widget(empty, body);
         return;
     };
 
@@ -187,12 +194,7 @@ fn draw_detail(app: &App, frame: &mut Frame, area: Rect) {
         ]));
     }
 
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(block)
-            .wrap(Wrap { trim: false }),
-        area,
-    );
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
 }
 
 fn draw_form(form: &Form, frame: &mut Frame, area: Rect) {
