@@ -42,7 +42,7 @@ const COMMAND_CAP: usize = 60;
 /// Share of the matching commands the column is sized to hold in full.
 const COMMAND_PERCENTILE: usize = 80;
 
-pub fn draw(app: &mut App, frame: &mut Frame) {
+pub fn draw(app: &App, frame: &mut Frame) {
     let [query, body, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
@@ -72,7 +72,7 @@ fn draw_query(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(prompt), area);
 }
 
-fn draw_browse(app: &mut App, frame: &mut Frame, area: Rect) {
+fn draw_browse(app: &App, frame: &mut Frame, area: Rect) {
     // Fixed rather than sized to the selected entry. Letting it grow for an
     // entry with placeholders would change how many rows the list has every time
     // the cursor moved, and the ground would shift under what is being read.
@@ -84,7 +84,7 @@ fn draw_browse(app: &mut App, frame: &mut Frame, area: Rect) {
     draw_detail(app, frame, detail);
 }
 
-fn draw_list(app: &mut App, frame: &mut Frame, area: Rect) {
+fn draw_list(app: &App, frame: &mut Frame, area: Rect) {
     let height = area.height as usize;
     if height == 0 {
         return;
@@ -100,32 +100,28 @@ fn draw_list(app: &mut App, frame: &mut Frame, area: Rect) {
     let columns = Columns::fit(&lengths, area.width as usize);
 
     let selected = app.selected();
-    let visible: Vec<RowText> = app
+    let lines: Vec<Line> = app
         .rows()
         .enumerate()
         .skip(first)
         .take(height)
-        .map(|(index, row)| RowText {
-            selected: index == selected,
-            cmd: row.cmd.to_string(),
-            desc: row.entry.desc.clone(),
-            danger: row.entry.danger,
-            pinned: row.pinned,
-        })
-        .collect();
-
-    let lines: Vec<Line> = visible
-        .into_iter()
-        .map(|row| {
-            let matched = app.highlight(&row.cmd);
-            row_line(&row, &matched, columns)
+        .map(|(index, row)| {
+            let text = RowText {
+                selected: index == selected,
+                cmd: row.cmd.to_string(),
+                desc: row.entry.desc.clone(),
+                danger: row.entry.danger,
+                pinned: row.pinned,
+            };
+            let matched = app.highlight(&text.cmd);
+            row_line(&text, &matched, columns)
         })
         .collect();
 
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// One row's content, gathered so drawing does not borrow the app twice.
+/// One row's content, owned so the line outlives the entry it came from.
 struct RowText {
     selected: bool,
     cmd: String,

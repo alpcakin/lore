@@ -9,7 +9,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::model::{Entry, Layer, ShellFamily};
 use crate::params;
-use crate::search::{Candidate, Ranker};
+use crate::search::{self, Candidate};
 use crate::store::definitions::{self, NewEntry};
 use crate::store::stats::{Score, Stats};
 use crate::tui::form::{Field, Form};
@@ -45,7 +45,6 @@ pub struct App {
     query: String,
     mode: Mode,
     status: Option<String>,
-    ranker: Ranker,
     stats: Stats,
     scores: HashMap<String, Score>,
     library: PathBuf,
@@ -74,7 +73,6 @@ impl App {
             query: String::new(),
             mode: Mode::Browse,
             status: None,
-            ranker: Ranker::new(),
             stats,
             scores,
             library,
@@ -127,9 +125,8 @@ impl App {
     }
 
     /// Highlights the query inside a haystack for the rows on screen.
-    pub fn highlight(&mut self, haystack: &str) -> Vec<u32> {
-        let query = self.query.clone();
-        self.ranker.highlight(haystack, &query)
+    pub fn highlight(&self, haystack: &str) -> Vec<u32> {
+        search::highlight(haystack, &self.query)
     }
 
     pub fn on_key(&mut self, key: KeyEvent) -> Result<Option<Outcome>> {
@@ -474,7 +471,7 @@ impl App {
             })
             .collect();
 
-        let ranked = self.ranker.rank(&candidates, &self.scores, &self.query);
+        let ranked = search::rank(&candidates, &self.scores, &self.query);
         self.order = ranked.into_iter().map(|rank| self.pickable[rank]).collect();
         self.selected = self.selected.min(self.order.len().saturating_sub(1));
     }

@@ -3,10 +3,9 @@
 //! A query is split on whitespace and every term has to be found as a
 //! contiguous run of characters. Letting the letters of one term scatter across
 //! a field fills the list with entries that share nothing with what was typed:
-//! `git` otherwise matches `Get-ChildItem` through its g, i and t.
-//!
-//! Scattered matching survives only as a fallback for a query that finds nothing
-//! at all, where a mistyped guess beats an empty list.
+//! `git` otherwise matches `Get-ChildItem` through its g, i and t. A query that
+//! nothing contains therefore matches nothing, so every row on screen holds
+//! what was typed.
 //!
 //! Match quality is the primary sort key and is deliberately coarse. Fine
 //! grained scores reorder neighbouring entries for reasons the user cannot see,
@@ -15,9 +14,6 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
-
-use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
-use nucleo_matcher::{Config, Matcher, Utf32Str};
 
 use crate::model::{Entry, Layer};
 use crate::store::stats::Score;
@@ -32,8 +28,6 @@ pub struct Candidate<'a> {
 /// How closely a field matched. Ordered weakest to strongest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Quality {
-    /// The term appears only as a scattered subsequence, from the fallback pass.
-    Scattered,
     /// The term appears somewhere inside a word.
     Inside,
     /// The term starts a word.
@@ -58,155 +52,67 @@ struct Rank {
     /// user is searching, a builtin may well be exactly what they want.
     layer: Option<Layer>,
     frecency: f64,
-    tiebreak: u32,
 }
 
-pub struct Ranker {
-    matcher: Matcher,
-    buffer: Vec<char>,
-}
+/// Indices into `candidates`, best first, with non-matching entries removed.
+pub fn rank(
+    candidates: &[Candidate<'_>],
+    scores: &HashMap<String, Score>,
+    query: &str,
+) -> Vec<usize> {
+    let terms = terms(query);
+    let mut ranked: Vec<(usize, Rank)> = Vec::with_capacity(candidates.len());
 
-impl Default for Ranker {
-    fn default() -> Self {
-        Self::new()
+    for (index, candidate) in candidates.iter().enumerate() {
+        let quality = if terms.is_empty() {
+            None
+        } else if let Some(quality) = all_terms(candidate, &terms) {
+            Some(quality)
+        } else {
+            continue;
+        };
+
+        let score = scores.get(&candidate.entry.id);
+
+        ranked.push((
+            index,
+            Rank {
+                quality,
+                pinned: score.is_some_and(|s| s.pinned),
+                layer: quality.is_none().then_some(candidate.entry.layer),
+                frecency: score.map(|s| s.value).unwrap_or_default(),
+            },
+        ));
     }
-}
 
-impl Ranker {
-    pub fn new() -> Self {
-        Self {
-            matcher: Matcher::new(Config::DEFAULT),
-            buffer: Vec::new(),
-        }
-    }
-
-    /// Indices into `candidates`, best first, with non-matching entries removed.
-    pub fn rank(
-        &mut self,
-        candidates: &[Candidate<'_>],
-        scores: &HashMap<String, Score>,
-        query: &str,
-    ) -> Vec<usize> {
-        let terms = terms(query);
-        if terms.is_empty() {
-            return self.order(candidates, scores, |_, _| Some((None, 0)));
-        }
-
-        let found = self.order(candidates, scores, |_, candidate| {
-            all_terms(candidate, &terms).map(|quality| (Some(quality), 0))
-        });
-        if !found.is_empty() {
-            return found;
-        }
-
-        // Nothing contained what was typed, so loosen off rather than showing an
-        // empty panel.
-        let pattern = fuzzy_pattern(query);
-        self.order(candidates, scores, |ranker, candidate| {
-            ranker
-                .scattered(candidate, &pattern)
-                .map(|(field, score)| (Some((Quality::Scattered, field)), score))
+    ranked.sort_by(|(left_index, left), (right_index, right)| {
+        compare(left, right).then_with(|| {
+            // Ids are unique and the input is id-ordered, so this makes the
+            // result stable rather than merely deterministic.
+            candidates[*left_index]
+                .entry
+                .id
+                .cmp(&candidates[*right_index].entry.id)
         })
-    }
+    });
 
-    #[allow(clippy::type_complexity)]
-    fn order(
-        &mut self,
-        candidates: &[Candidate<'_>],
-        scores: &HashMap<String, Score>,
-        assess: impl Fn(&mut Self, &Candidate<'_>) -> Option<(Option<(Quality, Field)>, u32)>,
-    ) -> Vec<usize> {
-        let mut ranked: Vec<(usize, Rank)> = Vec::with_capacity(candidates.len());
-
-        for (index, candidate) in candidates.iter().enumerate() {
-            let Some((quality, tiebreak)) = assess(self, candidate) else {
-                continue;
-            };
-            let score = scores.get(&candidate.entry.id);
-
-            ranked.push((
-                index,
-                Rank {
-                    quality,
-                    pinned: score.is_some_and(|s| s.pinned),
-                    layer: quality.is_none().then_some(candidate.entry.layer),
-                    frecency: score.map(|s| s.value).unwrap_or_default(),
-                    tiebreak,
-                },
-            ));
-        }
-
-        ranked.sort_by(|(left_index, left), (right_index, right)| {
-            compare(left, right).then_with(|| {
-                // Ids are unique and the input is id-ordered, so this makes the
-                // result stable rather than merely deterministic.
-                candidates[*left_index]
-                    .entry
-                    .id
-                    .cmp(&candidates[*right_index].entry.id)
-            })
-        });
-
-        ranked.into_iter().map(|(index, _)| index).collect()
-    }
-
-    fn scattered(&mut self, candidate: &Candidate<'_>, pattern: &Pattern) -> Option<(Field, u32)> {
-        let tags = candidate.entry.tags.join(" ");
-        let fields = [
-            (Field::Cmd, candidate.cmd),
-            (Field::Desc, candidate.entry.desc.as_str()),
-            (Field::Tags, tags.as_str()),
-        ];
-
-        fields
-            .into_iter()
-            .filter_map(|(field, haystack)| {
-                let score =
-                    pattern.score(Utf32Str::new(haystack, &mut self.buffer), &mut self.matcher)?;
-                Some((field, score))
-            })
-            .max_by_key(|(field, score)| (*field, *score))
-    }
-
-    /// Character positions in `haystack` that the query matched, for
-    /// highlighting.
-    ///
-    /// Called only for the rows actually on screen, so its cost does not scale
-    /// with the size of the library.
-    pub fn highlight(&mut self, haystack: &str, query: &str) -> Vec<u32> {
-        let terms = terms(query);
-        if terms.is_empty() {
-            return Vec::new();
-        }
-
-        let mut found: Vec<u32> = terms
-            .iter()
-            .filter_map(|term| find(haystack, term))
-            .flat_map(|(_, covered)| covered)
-            .collect();
-
-        if found.is_empty() {
-            let pattern = fuzzy_pattern(query);
-            pattern.indices(
-                Utf32Str::new(haystack, &mut self.buffer),
-                &mut self.matcher,
-                &mut found,
-            );
-        }
-
-        found.sort_unstable();
-        found.dedup();
-        found
-    }
+    ranked.into_iter().map(|(index, _)| index).collect()
 }
 
-fn fuzzy_pattern(query: &str) -> Pattern {
-    Pattern::new(
-        query.trim(),
-        CaseMatching::Smart,
-        Normalization::Smart,
-        AtomKind::Fuzzy,
-    )
+/// Character positions in `haystack` that the query matched, for highlighting.
+///
+/// Called only for the rows actually on screen, so its cost does not scale with
+/// the size of the library.
+pub fn highlight(haystack: &str, query: &str) -> Vec<u32> {
+    let mut found: Vec<u32> = terms(query)
+        .iter()
+        .filter_map(|term| find(haystack, term))
+        .flat_map(|(_, covered)| covered)
+        .collect();
+
+    found.sort_unstable();
+    found.dedup();
+    found
 }
 
 fn terms(query: &str) -> Vec<String> {
@@ -307,7 +213,6 @@ fn compare(left: &Rank, right: &Rank) -> Ordering {
         .then(right.pinned.cmp(&left.pinned))
         .then(right.layer.cmp(&left.layer))
         .then(right.frecency.total_cmp(&left.frecency))
-        .then(right.tiebreak.cmp(&left.tiebreak))
 }
 
 #[cfg(test)]
@@ -362,8 +267,7 @@ mod tests {
         query: &str,
     ) -> Vec<&'a str> {
         let candidates = candidates(entries);
-        Ranker::new()
-            .rank(&candidates, scores, query)
+        rank(&candidates, scores, query)
             .into_iter()
             .map(|index| candidates[index].entry.id.as_str())
             .collect()
@@ -446,6 +350,13 @@ mod tests {
     }
 
     #[test]
+    fn letters_are_never_gathered_from_separate_words() {
+        let entries = sample();
+        // "docker ps" spells out d, p and s in order, across two words.
+        assert!(order(&entries, &HashMap::new(), "dps").is_empty());
+    }
+
+    #[test]
     fn every_term_has_to_be_found() {
         let entries = vec![
             entry(
@@ -489,14 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn a_query_that_matches_nothing_falls_back_to_scattered_letters() {
-        let entries = sample();
-        // No entry contains "dps", but docker ps spells it out in order.
-        assert_eq!(order(&entries, &HashMap::new(), "dps"), ["docker.ps"]);
-    }
-
-    #[test]
-    fn the_fallback_still_reports_nothing_for_a_hopeless_query() {
+    fn a_query_nothing_contains_matches_nothing() {
         let entries = sample();
         assert!(order(&entries, &HashMap::new(), "zzzzq").is_empty());
     }
@@ -618,16 +522,14 @@ mod tests {
 
     #[test]
     fn highlight_marks_the_term_it_found() {
-        let mut ranker = Ranker::new();
-        assert_eq!(ranker.highlight("docker ps", "ps"), [7, 8]);
-        assert_eq!(ranker.highlight("docker ps", "docker"), [0, 1, 2, 3, 4, 5]);
-        assert!(ranker.highlight("docker ps", "").is_empty());
+        assert_eq!(highlight("docker ps", "ps"), [7, 8]);
+        assert_eq!(highlight("docker ps", "docker"), [0, 1, 2, 3, 4, 5]);
+        assert!(highlight("docker ps", "").is_empty());
     }
 
     #[test]
-    fn highlight_falls_back_with_the_search() {
-        let mut ranker = Ranker::new();
-        assert_eq!(ranker.highlight("docker ps", "dps"), [0, 7, 8]);
+    fn highlight_marks_nothing_it_did_not_match() {
+        assert!(highlight("docker ps", "dps").is_empty());
     }
 
     /// Not an assertion: timing thresholds are flaky on shared runners. Run it
@@ -650,11 +552,10 @@ mod tests {
 
         let candidates = candidates(&entries);
         let scores = HashMap::new();
-        let mut ranker = Ranker::new();
 
         for query in ["", "k", "ku", "kub", "kube", "pods", "get pods", "zzz"] {
             let started = std::time::Instant::now();
-            let ranked = ranker.rank(&candidates, &scores, query);
+            let ranked = rank(&candidates, &scores, query);
             println!(
                 "query {:>9?}: {:>5} matches in {:>8.3?}",
                 query,
