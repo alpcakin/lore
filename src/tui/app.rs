@@ -1,0 +1,735 @@
+//! Picker state and key handling, kept free of any terminal so it can be tested
+//! directly.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::PathBuf;
+
+use anyhow::Result;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+use crate::model::{Entry, ShellFamily};
+use crate::params;
+use crate::search::{Candidate, Ranker};
+use crate::store::definitions::{self, NewEntry};
+use crate::store::stats::{Score, Stats};
+use crate::tui::form::{Field, Form};
+
+/// What the picker hands back to the shell.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// Command to place in the prompt. Running it stays the user's decision.
+    Insert(String),
+    Cancelled,
+}
+
+pub enum Mode {
+    Browse,
+    Params {
+        entry_id: String,
+        template: String,
+        form: Form,
+    },
+    Save {
+        form: Form,
+    },
+}
+
+pub struct App {
+    entries: Vec<Entry>,
+    family: ShellFamily,
+    /// Entries that have a command for this shell, in load order.
+    pickable: Vec<usize>,
+    /// Ranked entry indices, best first.
+    order: Vec<usize>,
+    selected: usize,
+    query: String,
+    mode: Mode,
+    status: Option<String>,
+    ranker: Ranker,
+    stats: Stats,
+    scores: HashMap<String, Score>,
+    library: PathBuf,
+    last_command: Option<String>,
+    now: i64,
+}
+
+impl App {
+    pub fn new(
+        entries: Vec<Entry>,
+        family: ShellFamily,
+        stats: Stats,
+        library: PathBuf,
+        last_command: Option<String>,
+        now: i64,
+    ) -> Result<Self> {
+        let scores = stats.scores(now)?;
+        let mut app = Self {
+            entries,
+            family,
+            pickable: Vec::new(),
+            order: Vec::new(),
+            selected: 0,
+            query: String::new(),
+            mode: Mode::Browse,
+            status: None,
+            ranker: Ranker::new(),
+            stats,
+            scores,
+            library,
+            last_command,
+            now,
+        };
+        app.reindex();
+        Ok(app)
+    }
+
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    pub fn mode(&self) -> &Mode {
+        &self.mode
+    }
+
+    pub fn status(&self) -> Option<&str> {
+        self.status.as_deref()
+    }
+
+    pub fn has_last_command(&self) -> bool {
+        self.last_command.is_some()
+    }
+
+    pub fn selected(&self) -> usize {
+        self.selected
+    }
+
+    pub fn matches(&self) -> usize {
+        self.order.len()
+    }
+
+    /// The entries currently on offer, best first.
+    pub fn rows(&self) -> impl Iterator<Item = Row<'_>> {
+        self.order.iter().map(move |&index| {
+            let entry = &self.entries[index];
+            Row {
+                entry,
+                cmd: entry.cmd_for(self.family).expect("filtered on this"),
+                pinned: self.scores.get(&entry.id).is_some_and(|s| s.pinned),
+            }
+        })
+    }
+
+    pub fn selected_row(&self) -> Option<Row<'_>> {
+        self.rows().nth(self.selected)
+    }
+
+    /// Highlights the query inside a haystack for the rows on screen.
+    pub fn highlight(&mut self, haystack: &str) -> Vec<u32> {
+        let query = self.query.clone();
+        self.ranker.highlight(haystack, &query)
+    }
+
+    pub fn on_key(&mut self, key: KeyEvent) -> Result<Option<Outcome>> {
+        self.status = None;
+
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        if control && matches!(key.code, KeyCode::Char('c')) {
+            return Ok(Some(Outcome::Cancelled));
+        }
+
+        match &mut self.mode {
+            Mode::Browse => self.browse_key(key, control),
+            Mode::Params { .. } => self.params_key(key, control),
+            Mode::Save { .. } => self.save_key(key, control),
+        }
+    }
+
+    fn browse_key(&mut self, key: KeyEvent, control: bool) -> Result<Option<Outcome>> {
+        match key.code {
+            KeyCode::Esc => return Ok(Some(Outcome::Cancelled)),
+            KeyCode::Char('g') if control => return Ok(Some(Outcome::Cancelled)),
+            KeyCode::Enter => return self.choose(),
+
+            KeyCode::Up => self.move_by(-1),
+            KeyCode::Down => self.move_by(1),
+            KeyCode::Char('k') if control => self.move_by(-1),
+            KeyCode::Char('j') if control => self.move_by(1),
+            KeyCode::PageUp => self.move_by(-10),
+            KeyCode::PageDown => self.move_by(10),
+
+            KeyCode::Char('p') if control => self.toggle_pin()?,
+            KeyCode::Char('s') if control => self.begin_save_last(),
+            KeyCode::Char('n') if control => self.begin_save_new(),
+
+            KeyCode::Char('u') if control => {
+                self.query.clear();
+                self.reindex();
+            }
+            KeyCode::Backspace => {
+                self.query.pop();
+                self.reindex();
+            }
+            KeyCode::Char(character) if !control => {
+                self.query.push(character);
+                self.reindex();
+            }
+            _ => {}
+        }
+
+        Ok(None)
+    }
+
+    fn params_key(&mut self, key: KeyEvent, control: bool) -> Result<Option<Outcome>> {
+        let Mode::Params { form, .. } = &mut self.mode else {
+            return Ok(None);
+        };
+
+        match key.code {
+            KeyCode::Esc => self.mode = Mode::Browse,
+            KeyCode::Enter | KeyCode::Tab | KeyCode::Down => {
+                if form.advance() {
+                    return self.finish_params();
+                }
+            }
+            KeyCode::BackTab | KeyCode::Up => form.retreat(),
+            KeyCode::Char('u') if control => form.clear(),
+            KeyCode::Backspace => form.backspace(),
+            KeyCode::Char(character) if !control => form.insert(character),
+            _ => {}
+        }
+
+        Ok(None)
+    }
+
+    fn save_key(&mut self, key: KeyEvent, control: bool) -> Result<Option<Outcome>> {
+        let Mode::Save { form } = &mut self.mode else {
+            return Ok(None);
+        };
+
+        match key.code {
+            KeyCode::Esc => self.mode = Mode::Browse,
+            KeyCode::Enter | KeyCode::Tab | KeyCode::Down => {
+                if form.advance() {
+                    self.finish_save()?;
+                }
+            }
+            KeyCode::BackTab | KeyCode::Up => form.retreat(),
+            KeyCode::Char('u') if control => form.clear(),
+            KeyCode::Backspace => form.backspace(),
+            KeyCode::Char(character) if !control => form.insert(character),
+            _ => {}
+        }
+
+        Ok(None)
+    }
+
+    /// Enter on a row: prompt for placeholders, or hand the command back.
+    fn choose(&mut self) -> Result<Option<Outcome>> {
+        let Some(row) = self.selected_row() else {
+            return Ok(None);
+        };
+        let entry_id = row.entry.id.clone();
+        let template = row.cmd.to_string();
+
+        let names = params::names(&template);
+        if names.is_empty() {
+            self.stats.record_use(&entry_id, self.now)?;
+            return Ok(Some(Outcome::Insert(template)));
+        }
+
+        let remembered = self.stats.last_params(&entry_id)?;
+        let defaults: BTreeMap<String, String> = params::parse(&template)
+            .into_iter()
+            .filter_map(|p| p.default.map(|value| (p.name, value)))
+            .collect();
+
+        let fields = names
+            .iter()
+            .map(|name| {
+                let value = remembered
+                    .get(name)
+                    .or_else(|| defaults.get(name))
+                    .cloned()
+                    .unwrap_or_default();
+                let hint = self
+                    .entries
+                    .iter()
+                    .find(|e| e.id == entry_id)
+                    .and_then(|e| e.params.get(name))
+                    .and_then(|spec| spec.desc.clone());
+                Field::new(name, value).with_hint(hint)
+            })
+            .collect();
+
+        self.mode = Mode::Params {
+            entry_id,
+            template,
+            form: Form::new("Fill in the placeholders", fields),
+        };
+        Ok(None)
+    }
+
+    fn finish_params(&mut self) -> Result<Option<Outcome>> {
+        let Mode::Params {
+            entry_id,
+            template,
+            form,
+        } = &self.mode
+        else {
+            return Ok(None);
+        };
+
+        let mut values = BTreeMap::new();
+        for field in &form.fields {
+            values.insert(field.label.clone(), field.value.trim().to_string());
+        }
+
+        let command = params::render(template, &values);
+        let entry_id = entry_id.clone();
+
+        for (name, value) in &values {
+            self.stats.remember_param(&entry_id, name, value)?;
+        }
+        self.stats.record_use(&entry_id, self.now)?;
+
+        Ok(Some(Outcome::Insert(command)))
+    }
+
+    fn begin_save_last(&mut self) {
+        match self.last_command.clone() {
+            Some(command) => self.begin_save(command),
+            None => {
+                self.status = Some("No previous command was passed in by the shell".to_string());
+            }
+        }
+    }
+
+    fn begin_save_new(&mut self) {
+        self.begin_save(String::new());
+    }
+
+    fn begin_save(&mut self, command: String) {
+        self.mode = Mode::Save {
+            form: Form::new(
+                "Save a command",
+                vec![
+                    Field::new("command", command),
+                    Field::new("description", ""),
+                    Field::new("tags", "").with_hint(Some("comma separated".to_string())),
+                ],
+            ),
+        };
+    }
+
+    fn finish_save(&mut self) -> Result<()> {
+        let Mode::Save { form } = &self.mode else {
+            return Ok(());
+        };
+
+        let command = form.value(0).to_string();
+        let description = form.value(1).to_string();
+        let tags: Vec<String> = form
+            .value(2)
+            .split(',')
+            .map(|tag| tag.trim().to_string())
+            .filter(|tag| !tag.is_empty())
+            .collect();
+
+        if command.is_empty() {
+            self.status = Some("A command is required".to_string());
+            return Ok(());
+        }
+        // Without a description the entry is only findable by its own text,
+        // which defeats the point of saving it in the first place.
+        if description.is_empty() {
+            self.status = Some("A description is required to find this later".to_string());
+            if let Mode::Save { form } = &mut self.mode {
+                form.focused = 1;
+            }
+            return Ok(());
+        }
+
+        let taken: BTreeSet<String> = self.entries.iter().map(|e| e.id.clone()).collect();
+        let entry = NewEntry {
+            id: definitions::suggest_id(&command, &taken),
+            cmd: command,
+            desc: description,
+            tags,
+        };
+        let id = entry.id.clone();
+
+        definitions::append(&self.library, &entry)?;
+        self.stats.record_new(&id, self.now)?;
+
+        self.entries = definitions::load(Some(&self.library))?;
+        self.scores = self.stats.scores(self.now)?;
+        self.mode = Mode::Browse;
+        self.query.clear();
+        self.reindex();
+        self.select_id(&id);
+        self.status = Some(format!("Saved as {id}"));
+
+        Ok(())
+    }
+
+    fn toggle_pin(&mut self) -> Result<()> {
+        let Some(row) = self.selected_row() else {
+            return Ok(());
+        };
+        let id = row.entry.id.clone();
+        let pinned = !row.pinned;
+
+        self.stats.set_pinned(&id, pinned, self.now)?;
+        self.scores = self.stats.scores(self.now)?;
+        self.reindex();
+        self.select_id(&id);
+        self.status = Some(if pinned { "Pinned" } else { "Unpinned" }.to_string());
+
+        Ok(())
+    }
+
+    fn move_by(&mut self, delta: isize) {
+        if self.order.is_empty() {
+            self.selected = 0;
+            return;
+        }
+        let last = self.order.len() - 1;
+        let target = self.selected as isize + delta;
+        self.selected = target.clamp(0, last as isize) as usize;
+    }
+
+    fn select_id(&mut self, id: &str) {
+        if let Some(position) = self
+            .order
+            .iter()
+            .position(|&index| self.entries[index].id == id)
+        {
+            self.selected = position;
+        }
+    }
+
+    /// Recomputes which entries are on offer and in what order.
+    fn reindex(&mut self) {
+        self.pickable = (0..self.entries.len())
+            .filter(|&index| self.entries[index].cmd_for(self.family).is_some())
+            .collect();
+
+        let candidates: Vec<Candidate<'_>> = self
+            .pickable
+            .iter()
+            .map(|&index| {
+                let entry = &self.entries[index];
+                Candidate {
+                    entry,
+                    cmd: entry.cmd_for(self.family).expect("filtered on this"),
+                }
+            })
+            .collect();
+
+        let ranked = self.ranker.rank(&candidates, &self.scores, &self.query);
+        self.order = ranked.into_iter().map(|rank| self.pickable[rank]).collect();
+        self.selected = self.selected.min(self.order.len().saturating_sub(1));
+    }
+}
+
+/// One line of the picker.
+pub struct Row<'a> {
+    pub entry: &'a Entry,
+    pub cmd: &'a str,
+    pub pinned: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{CommandBody, Layer, ParamSpec};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn ctrl(character: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL)
+    }
+
+    fn typed(app: &mut App, text: &str) {
+        for character in text.chars() {
+            app.on_key(key(KeyCode::Char(character))).unwrap();
+        }
+    }
+
+    fn entry(id: &str, cmd: &str, desc: &str) -> Entry {
+        Entry {
+            id: id.to_string(),
+            cmd: CommandBody::Shared(cmd.to_string()),
+            desc: desc.to_string(),
+            tags: Vec::new(),
+            params: BTreeMap::new(),
+            danger: false,
+            layer: Layer::Builtin,
+        }
+    }
+
+    fn app_with(entries: Vec<Entry>) -> App {
+        let library = std::env::temp_dir().join(format!(
+            "lore-app-{}-{:?}.yaml",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_file(&library);
+        App::new(
+            entries,
+            ShellFamily::Posix,
+            Stats::in_memory().unwrap(),
+            library,
+            Some("kics scan -p .".to_string()),
+            0,
+        )
+        .unwrap()
+    }
+
+    fn sample() -> App {
+        app_with(vec![
+            entry("git.log", "git log --oneline", "Show history"),
+            entry("docker.ps", "docker ps -a", "List containers"),
+            entry(
+                "k8s.logs",
+                "kubectl logs -f <pod> -n <namespace:default>",
+                "Follow pod logs",
+            ),
+        ])
+    }
+
+    #[test]
+    fn typing_filters_the_list() {
+        let mut app = sample();
+        assert_eq!(app.matches(), 3);
+        typed(&mut app, "git");
+        assert_eq!(app.matches(), 1);
+        assert_eq!(app.selected_row().unwrap().entry.id, "git.log");
+    }
+
+    #[test]
+    fn backspace_widens_the_list_again() {
+        let mut app = sample();
+        typed(&mut app, "git");
+        app.on_key(key(KeyCode::Backspace)).unwrap();
+        app.on_key(key(KeyCode::Backspace)).unwrap();
+        app.on_key(key(KeyCode::Backspace)).unwrap();
+        assert_eq!(app.query(), "");
+        assert_eq!(app.matches(), 3);
+    }
+
+    #[test]
+    fn selection_stays_inside_the_list() {
+        let mut app = sample();
+        for _ in 0..10 {
+            app.on_key(key(KeyCode::Down)).unwrap();
+        }
+        assert_eq!(app.selected(), 2);
+        for _ in 0..10 {
+            app.on_key(key(KeyCode::Up)).unwrap();
+        }
+        assert_eq!(app.selected(), 0);
+    }
+
+    #[test]
+    fn a_narrowed_list_never_leaves_the_cursor_past_the_end() {
+        let mut app = sample();
+        app.on_key(key(KeyCode::Down)).unwrap();
+        app.on_key(key(KeyCode::Down)).unwrap();
+        typed(&mut app, "git");
+        assert_eq!(app.selected(), 0);
+        assert!(app.selected_row().is_some());
+    }
+
+    #[test]
+    fn enter_on_a_plain_command_returns_it() {
+        let mut app = sample();
+        typed(&mut app, "docker");
+        let outcome = app.on_key(key(KeyCode::Enter)).unwrap();
+        assert_eq!(outcome, Some(Outcome::Insert("docker ps -a".to_string())));
+    }
+
+    #[test]
+    fn escape_cancels_without_choosing() {
+        let mut app = sample();
+        assert_eq!(
+            app.on_key(key(KeyCode::Esc)).unwrap(),
+            Some(Outcome::Cancelled)
+        );
+    }
+
+    #[test]
+    fn the_opening_chord_also_closes_the_picker() {
+        let mut app = sample();
+        assert_eq!(app.on_key(ctrl('g')).unwrap(), Some(Outcome::Cancelled));
+    }
+
+    #[test]
+    fn enter_on_a_parameterised_command_asks_for_values() {
+        let mut app = sample();
+        typed(&mut app, "kubectl");
+        assert_eq!(app.on_key(key(KeyCode::Enter)).unwrap(), None);
+        assert!(matches!(app.mode(), Mode::Params { .. }));
+    }
+
+    #[test]
+    fn placeholder_defaults_arrive_pre_filled() {
+        let mut app = sample();
+        typed(&mut app, "kubectl");
+        app.on_key(key(KeyCode::Enter)).unwrap();
+
+        let Mode::Params { form, .. } = app.mode() else {
+            panic!("expected the parameter form");
+        };
+        assert_eq!(form.fields[0].label, "pod");
+        assert_eq!(form.fields[0].value, "");
+        assert_eq!(form.fields[1].label, "namespace");
+        assert_eq!(form.fields[1].value, "default");
+    }
+
+    #[test]
+    fn filled_placeholders_produce_the_final_command() {
+        let mut app = sample();
+        typed(&mut app, "kubectl");
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        typed(&mut app, "api-0");
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        let outcome = app.on_key(key(KeyCode::Enter)).unwrap();
+
+        assert_eq!(
+            outcome,
+            Some(Outcome::Insert(
+                "kubectl logs -f api-0 -n default".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn a_second_use_remembers_the_last_values() {
+        let mut app = sample();
+        typed(&mut app, "kubectl");
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        typed(&mut app, "api-0");
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+
+        // Reopening the same entry should not ask for the pod name again.
+        app.mode = Mode::Browse;
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        let Mode::Params { form, .. } = app.mode() else {
+            panic!("expected the parameter form");
+        };
+        assert_eq!(form.fields[0].value, "api-0");
+    }
+
+    #[test]
+    fn escape_leaves_the_parameter_form_without_choosing() {
+        let mut app = sample();
+        typed(&mut app, "kubectl");
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        assert_eq!(app.on_key(key(KeyCode::Esc)).unwrap(), None);
+        assert!(matches!(app.mode(), Mode::Browse));
+    }
+
+    #[test]
+    fn parameter_descriptions_reach_the_form() {
+        let mut with_desc = entry("one.param", "scan -p <path>", "Scan a directory");
+        with_desc.params.insert(
+            "path".to_string(),
+            ParamSpec {
+                desc: Some("Directory to scan".to_string()),
+                from: None,
+            },
+        );
+
+        let mut app = app_with(vec![with_desc]);
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        let Mode::Params { form, .. } = app.mode() else {
+            panic!("expected the parameter form");
+        };
+        assert_eq!(form.fields[0].hint.as_deref(), Some("Directory to scan"));
+    }
+
+    #[test]
+    fn saving_the_last_command_adds_it_to_the_library() {
+        let mut app = sample();
+        app.on_key(ctrl('s')).unwrap();
+
+        let Mode::Save { form } = app.mode() else {
+            panic!("expected the save form");
+        };
+        assert_eq!(form.fields[0].value, "kics scan -p .");
+
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        typed(&mut app, "Scan this project");
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+
+        assert!(matches!(app.mode(), Mode::Browse));
+        assert!(app.status().unwrap().contains("user.kics-scan"));
+
+        // Saving reloads from disk, so the entry is now in the ranked list and
+        // sitting under the cursor ready to be inserted.
+        let saved = app.selected_row().unwrap();
+        assert_eq!(saved.entry.id, "user.kics-scan");
+        assert_eq!(saved.cmd, "kics scan -p .");
+        assert_eq!(saved.entry.desc, "Scan this project");
+
+        let _ = std::fs::remove_file(&app.library);
+    }
+
+    #[test]
+    fn saving_refuses_an_entry_nobody_could_find_later() {
+        let mut app = sample();
+        app.on_key(ctrl('s')).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+
+        assert!(matches!(app.mode(), Mode::Save { .. }));
+        assert!(app.status().unwrap().contains("description"));
+    }
+
+    #[test]
+    fn saving_without_a_command_from_the_shell_says_so() {
+        let mut app = app_with(vec![entry("git.log", "git log", "Show history")]);
+        app.last_command = None;
+        app.on_key(ctrl('s')).unwrap();
+
+        assert!(matches!(app.mode(), Mode::Browse));
+        assert!(app.status().unwrap().contains("No previous command"));
+    }
+
+    #[test]
+    fn pinning_floats_an_entry_to_the_top() {
+        let mut app = sample();
+        typed(&mut app, "docker");
+        app.on_key(ctrl('p')).unwrap();
+
+        app.on_key(ctrl('u')).unwrap();
+        assert_eq!(app.selected_row().unwrap().entry.id, "docker.ps");
+        assert!(app.selected_row().unwrap().pinned);
+    }
+
+    #[test]
+    fn pinning_twice_unpins() {
+        let mut app = sample();
+        app.on_key(ctrl('p')).unwrap();
+        assert!(app.selected_row().unwrap().pinned);
+        app.on_key(ctrl('p')).unwrap();
+        assert!(!app.selected_row().unwrap().pinned);
+    }
+
+    #[test]
+    fn a_query_matching_nothing_leaves_the_picker_usable() {
+        let mut app = sample();
+        typed(&mut app, "zzzzz");
+        assert_eq!(app.matches(), 0);
+        assert!(app.selected_row().is_none());
+        assert_eq!(app.on_key(key(KeyCode::Enter)).unwrap(), None);
+        app.on_key(key(KeyCode::Down)).unwrap();
+        assert_eq!(app.selected(), 0);
+    }
+}

@@ -5,3 +5,4 @@ pub mod model;
 pub mod params;
 pub mod search;
 pub mod store;
+pub mod tui;

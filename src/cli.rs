@@ -4,7 +4,9 @@ use anyhow::{Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::model::{Entry, ShellFamily};
+use crate::store::stats::{self, Stats};
 use crate::store::{self, definitions};
+use crate::tui::{App, Outcome};
 
 /// A command library that lives in your shell.
 #[derive(Parser)]
@@ -75,7 +77,7 @@ impl Cli {
             Command::Init { .. } => bail!("`init` is not implemented yet"),
             Command::Setup => bail!("`setup` is not implemented yet"),
             Command::Uninstall => bail!("`uninstall` is not implemented yet"),
-            Command::Pick { .. } => bail!("`pick` is not implemented yet"),
+            Command::Pick { shell, last } => pick(family(shell), last),
             Command::Save { .. } => bail!("`save` is not implemented yet"),
             Command::List { shell } => list(family(shell)),
         }
@@ -90,6 +92,23 @@ fn family(shell: Option<Shell>) -> ShellFamily {
         None if cfg!(windows) => ShellFamily::PowerShell,
         None => ShellFamily::Posix,
     }
+}
+
+/// Opens the picker and writes the chosen command to stdout.
+///
+/// Only the command goes to stdout: the shell integration captures it and puts
+/// it in the prompt. Pressing enter on it stays the user's decision.
+fn pick(family: ShellFamily, last: Option<String>) -> Result<()> {
+    let library = store::user_library()?;
+    let entries = definitions::load(Some(&library))?;
+    let stats = Stats::open(&store::stats_database()?)?;
+
+    let app = App::new(entries, family, stats, library, last, stats::now())?;
+    if let Outcome::Insert(command) = crate::tui::run(app)? {
+        println!("{command}");
+    }
+
+    Ok(())
 }
 
 fn list(family: ShellFamily) -> Result<()> {
