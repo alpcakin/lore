@@ -18,7 +18,6 @@ const SELECTED: &str = "> ";
 const UNSELECTED: &str = "  ";
 const GAP: &str = "   ";
 const ELLIPSIS: &str = "..";
-const LEADER: &str = ".";
 
 /// Width of the selection marker plus the pin or destructive marker.
 const MARKERS: usize = 4;
@@ -28,9 +27,6 @@ const COMMAND_CAP: usize = 60;
 
 /// Share of the commands on screen the column is sized to hold in full.
 const COMMAND_PERCENTILE: usize = 80;
-
-/// Gap width past which the blank space becomes a rail to follow.
-const LEADER_MIN: usize = 6;
 
 pub fn draw(app: &mut App, frame: &mut Frame) {
     let [query, body, footer] = Layout::vertical([
@@ -181,12 +177,25 @@ impl Columns {
 /// or destructive entry does not shunt its own columns out of line with the rest
 /// of the list.
 fn row_line(row: &RowText, matched: &[u32], columns: Columns) -> Line<'static> {
-    let base = if row.selected {
-        Style::new().add_modifier(Modifier::BOLD)
+    // The selected row is carried in one colour from end to end. A wide gap
+    // between a short command and its description otherwise makes the eye travel
+    // the row to work out which belongs to which.
+    let (command_style, description_style, accent) = if row.selected {
+        let selected = Style::new().fg(Color::Yellow);
+        (
+            selected,
+            selected,
+            selected.add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        )
     } else {
-        Style::new()
+        (
+            Style::new(),
+            dim(),
+            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )
     };
 
+    // A destructive command keeps its warning colour even when selected.
     let (status, status_style) = if row.danger {
         ("! ", Style::new().fg(Color::Red))
     } else if row.pinned {
@@ -198,38 +207,24 @@ fn row_line(row: &RowText, matched: &[u32], columns: Columns) -> Line<'static> {
     let mut spans = vec![
         Span::styled(
             if row.selected { SELECTED } else { UNSELECTED },
-            Style::new().fg(Color::Cyan),
+            command_style,
         ),
         Span::styled(status, status_style),
     ];
 
     let command = truncate(&row.cmd, columns.command);
     let padding = columns.command - command.chars().count();
-    spans.extend(highlighted(&command, matched, base));
+    spans.extend(highlighted(&command, matched, command_style, accent));
 
     if columns.description() > ELLIPSIS.len() && !row.desc.is_empty() {
-        spans.push(leader(padding));
+        spans.push(Span::raw(" ".repeat(padding)));
         spans.push(Span::styled(
             format!("{GAP}{}", truncate(&row.desc, columns.description())),
-            dim(),
+            description_style,
         ));
     }
 
     Line::from(spans)
-}
-
-/// Fills the gap between a short command and its description.
-///
-/// A wide gap of blank space makes the eye travel the row to work out which
-/// description belongs to which command. Past a certain width the gap gets a
-/// faint rail to follow instead; short gaps are left alone, since a rail on
-/// every row would be noise.
-fn leader(width: usize) -> Span<'static> {
-    if width < LEADER_MIN {
-        return Span::raw(" ".repeat(width));
-    }
-
-    Span::styled(format!(" {} ", LEADER.repeat(width - 2)), dim())
 }
 
 fn truncate(text: &str, width: usize) -> String {
@@ -247,8 +242,7 @@ fn truncate(text: &str, width: usize) -> String {
 /// One span per character would work, but every span becomes its own cursor
 /// move in the rendered output, so a long command turns into a great deal of
 /// terminal traffic on each keystroke.
-fn highlighted(text: &str, matched: &[u32], base: Style) -> Vec<Span<'static>> {
-    let accent = base.fg(Color::Cyan).add_modifier(Modifier::BOLD);
+fn highlighted(text: &str, matched: &[u32], base: Style, accent: Style) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut run = String::new();
     let mut run_matched = false;
