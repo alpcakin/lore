@@ -33,7 +33,7 @@ const MARKERS: usize = 5;
 /// Most of a row the command column may take, however wide the commands are.
 const COMMAND_CAP: usize = 60;
 
-/// Share of the commands on screen the column is sized to hold in full.
+/// Share of the matching commands the column is sized to hold in full.
 const COMMAND_PERCENTILE: usize = 80;
 
 pub fn draw(app: &mut App, frame: &mut Frame) {
@@ -98,6 +98,12 @@ fn draw_list(app: &mut App, frame: &mut Frame, area: Rect) {
     // Keep the cursor on screen without letting the window jump around.
     let first = app.selected().saturating_sub(height.saturating_sub(1));
 
+    // Measured against every match rather than the rows on screen. Scrolling
+    // changes which rows are visible, and sizing to those would slide the whole
+    // table sideways every time the cursor moves past the edge.
+    let lengths: Vec<usize> = app.rows().map(|row| row.cmd.chars().count()).collect();
+    let columns = Columns::fit(&lengths, area.width as usize);
+
     let selected = app.selected();
     let visible: Vec<RowText> = app
         .rows()
@@ -113,7 +119,6 @@ fn draw_list(app: &mut App, frame: &mut Frame, area: Rect) {
         })
         .collect();
 
-    let columns = Columns::fit(&visible, area.width as usize);
     let lines: Vec<Line> = visible
         .into_iter()
         .map(|row| {
@@ -125,8 +130,7 @@ fn draw_list(app: &mut App, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// One row's content, gathered before drawing so the list can size its columns
-/// against everything that is actually on screen.
+/// One row's content, gathered so drawing does not borrow the app twice.
 struct RowText {
     selected: bool,
     cmd: String,
@@ -143,16 +147,16 @@ struct Columns {
 }
 
 impl Columns {
-    /// Sizes the command column so that most commands on screen fit.
+    /// Sizes the command column so that most of the matching commands fit.
     ///
     /// Sizing to the longest would let one outlier hold the column open and push
     /// every description away from its command; the outlier is truncated
     /// instead.
-    fn fit(rows: &[RowText], width: usize) -> Self {
+    fn fit(lengths: &[usize], width: usize) -> Self {
         let room = width.saturating_sub(MARKERS);
         let cap = (room * COMMAND_CAP / 100).max(1);
 
-        let mut lengths: Vec<usize> = rows.iter().map(|row| row.cmd.chars().count()).collect();
+        let mut lengths = lengths.to_vec();
         lengths.sort_unstable();
         let typical = lengths
             .get(lengths.len() * COMMAND_PERCENTILE / 100)
@@ -446,6 +450,25 @@ mod tests {
             .collect();
 
         assert!(plain.starts_with("     git log"), "drawn as {plain:?}");
+    }
+
+    /// Scrolling must not slide the table sideways, so the column is measured
+    /// against every match rather than the window on screen.
+    #[test]
+    fn the_column_ignores_which_rows_are_on_screen() {
+        let all = [10, 12, 14, 60, 11];
+        let window = [10, 12];
+
+        assert_ne!(
+            Columns::fit(&all, 100).command,
+            Columns::fit(&window, 100).command
+        );
+    }
+
+    #[test]
+    fn one_long_command_does_not_hold_the_column_open() {
+        let lengths = [8, 9, 10, 11, 120];
+        assert!(Columns::fit(&lengths, 100).command < 100);
     }
 
     #[test]
