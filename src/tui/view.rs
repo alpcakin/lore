@@ -20,6 +20,10 @@ const UNSELECTED: &str = "  ";
 const GAP: &str = "   ";
 const ELLIPSIS: &str = "..";
 
+/// Space between one hint and the next, wide enough that it cannot be read as
+/// the single space inside one.
+const HINT_GAP: &str = "   ";
+
 /// Colour carried across the selected row.
 ///
 /// The bright shade rather than plain yellow: a legacy Windows console renders
@@ -51,21 +55,24 @@ const COMMAND_CAP: usize = 60;
 const COMMAND_PERCENTILE: usize = 80;
 
 pub fn draw(app: &App, frame: &mut Frame) {
-    let [query, body, footer] = Layout::vertical([
+    // The hints sit above the query so that opening the picker reads top down:
+    // what you can do, then the line you type into, then the results. The blank
+    // row keeps them from being mistaken for part of the query.
+    let [hints, _gap, query, body] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(1),
-        Constraint::Length(1),
     ])
     .areas(frame.area());
 
+    draw_hints(app, frame, hints);
     draw_query(app, frame, query);
 
     match app.mode() {
         Mode::Browse => draw_browse(app, frame, body),
         Mode::Params { form, .. } | Mode::Save { form } => draw_form(form, frame, body),
     }
-
-    draw_footer(app, frame, footer);
 }
 
 fn draw_query(app: &App, frame: &mut Frame, area: Rect) {
@@ -362,29 +369,62 @@ fn draw_form(form: &Form, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
-fn draw_footer(app: &App, frame: &mut Frame, area: Rect) {
+/// The chords, and whatever the last action had to say.
+///
+/// A status message takes the line while it lasts. Giving it a row of its own
+/// would mean the list changing height the moment anything happened, and the
+/// panel is short enough that the ground would visibly move under what is being
+/// read.
+fn draw_hints(app: &App, frame: &mut Frame, area: Rect) {
+    // Centred, because left aligning it would put a second column of text hard
+    // against the left edge above the query and read as another prompt.
     if let Some(status) = app.status() {
         let style = Style::new().fg(Color::Yellow);
         frame.render_widget(
-            Paragraph::new(Span::styled(status.to_string(), style)),
+            Paragraph::new(Span::styled(status.to_string(), style)).centered(),
             area,
         );
         return;
     }
 
-    let hints = match app.mode() {
-        Mode::Browse => {
-            let mut hints = vec!["enter insert", "esc close", "^n new", "^p pin", "^x remove"];
-            if app.has_last_command() {
-                hints.insert(2, "^s save last");
-            }
-            hints.join("   ")
+    // The chord carries the colour the rest of the interface gives to what the
+    // user types, so the line reads as pairs rather than one grey run.
+    let mut spans = Vec::new();
+    for (chord, action) in hints(app) {
+        if !spans.is_empty() {
+            spans.push(Span::raw(HINT_GAP));
         }
-        Mode::Params { .. } => "enter next   esc back   ^u clear".to_string(),
-        Mode::Save { .. } => "enter next   esc cancel   ^u clear".to_string(),
-    };
+        spans.push(Span::styled(chord, Style::new().fg(Color::Cyan)));
+        spans.push(Span::styled(format!(" {action}"), dim()));
+    }
 
-    frame.render_widget(Paragraph::new(Span::styled(hints, dim())), area);
+    frame.render_widget(Paragraph::new(Line::from(spans)).centered(), area);
+}
+
+fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
+    match app.mode() {
+        Mode::Browse => browse_hints(app.has_last_command()),
+        Mode::Params { .. } => form_hints("back"),
+        Mode::Save { .. } => form_hints("cancel"),
+    }
+}
+
+fn browse_hints(has_last_command: bool) -> Vec<(&'static str, &'static str)> {
+    let mut hints = vec![
+        ("enter", "insert"),
+        ("esc", "close"),
+        ("^n", "new"),
+        ("^p", "pin"),
+        ("^x", "remove"),
+    ];
+    if has_last_command {
+        hints.insert(2, ("^s", "save last"));
+    }
+    hints
+}
+
+fn form_hints(escape: &'static str) -> Vec<(&'static str, &'static str)> {
+    vec![("enter", "next"), ("esc", escape), ("^u", "clear")]
 }
 
 fn dim() -> Style {
@@ -507,5 +547,31 @@ mod tests {
     #[test]
     fn a_builtin_recedes_behind_what_the_user_saved() {
         assert_eq!(command_colour(&builtin(false)), Some(BUILTIN));
+    }
+
+    /// The line clips rather than wraps, so the longest it ever gets has to
+    /// survive the narrowest terminal worth supporting.
+    #[test]
+    fn the_widest_hint_line_fits_a_narrow_terminal() {
+        let hints = browse_hints(true);
+        let width = hints
+            .iter()
+            .map(|(chord, action)| chord.len() + 1 + action.len())
+            .sum::<usize>()
+            + HINT_GAP.len() * (hints.len() - 1);
+
+        assert!(width <= 80, "the hint line is {width} columns");
+    }
+
+    #[test]
+    fn saving_the_last_command_is_offered_only_when_there_is_one() {
+        let offered = |has_last| {
+            browse_hints(has_last)
+                .iter()
+                .any(|(_, action)| *action == "save last")
+        };
+
+        assert!(offered(true));
+        assert!(!offered(false));
     }
 }
