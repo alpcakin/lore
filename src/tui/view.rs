@@ -13,8 +13,11 @@ use crate::tui::form::Form;
 // The interface stays ASCII only. A legacy Windows console runs on the
 // system code page, where box drawing characters arrive as mojibake.
 const RULE: &str = "-";
+const PROMPT: &str = "find: ";
 const SELECTED: &str = "> ";
 const UNSELECTED: &str = "  ";
+const GAP: &str = "   ";
+const ELLIPSIS: &str = "..";
 
 pub fn draw(app: &mut App, frame: &mut Frame) {
     let [query, body, footer] = Layout::vertical([
@@ -35,25 +38,46 @@ pub fn draw(app: &mut App, frame: &mut Frame) {
 }
 
 fn draw_query(app: &App, frame: &mut Frame, area: Rect) {
-    let count = format!(" {} ", app.matches());
+    let matches = match app.matches() {
+        1 => "1 match ".to_string(),
+        count => format!("{count} matches "),
+    };
     let [input, total] =
-        Layout::horizontal([Constraint::Min(1), Constraint::Length(count.len() as u16)])
+        Layout::horizontal([Constraint::Min(1), Constraint::Length(matches.len() as u16)])
             .areas(area);
 
+    // Labelled rather than prefixed with the row marker, so it is obvious which
+    // line accepts typing.
     let prompt = Line::from(vec![
-        Span::styled(SELECTED, Style::new().fg(Color::Cyan)),
+        Span::styled(PROMPT, Style::new().fg(Color::Cyan)),
         Span::styled(app.query(), Style::new().add_modifier(Modifier::BOLD)),
         Span::styled("_", dim()),
     ]);
     frame.render_widget(Paragraph::new(prompt), input);
-    frame.render_widget(Paragraph::new(Span::styled(count, dim())), total);
+    frame.render_widget(Paragraph::new(Span::styled(matches, dim())), total);
 }
 
 fn draw_browse(app: &mut App, frame: &mut Frame, area: Rect) {
-    let [list, detail] = Layout::vertical([Constraint::Min(1), Constraint::Length(6)]).areas(area);
+    let detail = detail_height(app).min(area.height.saturating_sub(1));
+    let [list, detail] =
+        Layout::vertical([Constraint::Min(1), Constraint::Length(detail)]).areas(area);
 
     draw_list(app, frame, list);
     draw_detail(app, frame, detail);
+}
+
+/// The panel is short, so the detail pane only claims the rows it will fill.
+fn detail_height(app: &App) -> u16 {
+    let Some(row) = app.selected_row() else {
+        return 2;
+    };
+
+    let rule = 1;
+    let command_and_description = 2;
+    let warning = u16::from(row.entry.danger);
+    let placeholders = params::names(row.cmd).len() as u16;
+
+    rule + command_and_description + warning + placeholders
 }
 
 fn draw_list(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -82,17 +106,30 @@ fn draw_list(app: &mut App, frame: &mut Frame, area: Rect) {
         .collect();
 
     let selected = app.selected();
+    let width = area.width as usize;
     let lines: Vec<Line> = visible
         .into_iter()
         .map(|(index, cmd, desc, danger, pinned)| {
             let matched = app.highlight(&cmd);
-            row_line(index == selected, &cmd, &desc, danger, pinned, &matched)
+            row_line(
+                index == selected,
+                &cmd,
+                &desc,
+                danger,
+                pinned,
+                &matched,
+                width,
+            )
         })
         .collect();
 
     frame.render_widget(Paragraph::new(lines), area);
 }
 
+/// One row: markers, the command, then as much of the description as fits.
+///
+/// Both halves are truncated deliberately rather than left to run off the right
+/// edge, where the description would be the part lost every time.
 fn row_line(
     selected: bool,
     cmd: &str,
@@ -100,6 +137,7 @@ fn row_line(
     danger: bool,
     pinned: bool,
     matched: &[u32],
+    width: usize,
 ) -> Line<'static> {
     let base = if selected {
         Style::new().add_modifier(Modifier::BOLD)
@@ -119,9 +157,34 @@ fn row_line(
         spans.push(Span::styled("! ", Style::new().fg(Color::Red)));
     }
 
-    spans.extend(highlighted(cmd, matched, base));
-    spans.push(Span::styled(format!("   {desc}"), dim()));
+    let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
+    let room = width.saturating_sub(used);
+
+    // The description never gets more than half the row, so a long command
+    // cannot squeeze it out entirely and a short one cannot leave a gulf.
+    let wanted = desc.chars().count().min(room / 2);
+    let for_command = room.saturating_sub(wanted + GAP.len());
+    let command = truncate(cmd, for_command);
+
+    let spare = room - command.chars().count();
+    spans.extend(highlighted(&command, matched, base));
+
+    if spare > GAP.len() && !desc.is_empty() {
+        let description = truncate(desc, spare - GAP.len());
+        spans.push(Span::styled(format!("{GAP}{description}"), dim()));
+    }
+
     Line::from(spans)
+}
+
+fn truncate(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    match width.checked_sub(ELLIPSIS.len()) {
+        Some(room) => text.chars().take(room).collect::<String>() + ELLIPSIS,
+        None => String::new(),
+    }
 }
 
 /// Splits `text` into runs of matched and unmatched characters.

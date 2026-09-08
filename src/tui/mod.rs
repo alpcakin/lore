@@ -1,4 +1,4 @@
-//! The picker: an alternate screen on the terminal device, driven by key events.
+//! The picker: a panel drawn below the prompt, driven by key events.
 
 mod app;
 mod form;
@@ -12,14 +12,18 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyEventKind};
-use crossterm::execute;
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
-use ratatui::Terminal;
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::backend::CrosstermBackend;
+use ratatui::{Terminal, TerminalOptions, Viewport};
 
 type Screen = Terminal<CrosstermBackend<File>>;
+
+/// Rows the picker reserves below the prompt.
+///
+/// It opens as a panel under the command line rather than taking over the
+/// screen, so the prompt and the scrollback above it stay where they were.
+/// Ratatui clamps this to the terminal height.
+const HEIGHT: u16 = 16;
 
 /// Runs the picker and returns what the shell should do.
 pub fn run(mut app: App) -> Result<Outcome> {
@@ -64,16 +68,26 @@ fn enter() -> Result<Screen> {
     install_panic_hook();
     enable_raw_mode().context("failed to put the terminal into raw mode")?;
 
-    let mut device = terminal_device()?;
-    execute!(device, EnterAlternateScreen).context("failed to open the alternate screen")?;
-
-    Terminal::new(CrosstermBackend::new(device)).context("failed to start the terminal backend")
+    Terminal::with_options(
+        CrosstermBackend::new(terminal_device()?),
+        TerminalOptions {
+            viewport: Viewport::Inline(HEIGHT),
+        },
+    )
+    .context("failed to start the terminal backend")
 }
 
+/// Erases the panel and leaves the cursor where it began, so the shell carries
+/// on as though the picker had never drawn anything.
 fn leave(screen: &mut Screen) -> Result<()> {
     drain_input();
-    restore();
+
+    let origin = screen.get_frame().area();
+    screen.clear().ok();
+    screen.set_cursor_position((origin.x, origin.y)).ok();
     screen.show_cursor().ok();
+
+    restore();
     Ok(())
 }
 
@@ -93,9 +107,6 @@ fn drain_input() {
 /// Leaves the terminal as it was found. Safe to call more than once.
 fn restore() {
     let _ = disable_raw_mode();
-    if let Ok(mut device) = terminal_device() {
-        let _ = execute!(device, LeaveAlternateScreen);
-    }
 }
 
 /// A panic inside raw mode would otherwise leave the user with an unusable
