@@ -19,6 +19,10 @@ const UNSELECTED: &str = "  ";
 const GAP: &str = "   ";
 const ELLIPSIS: &str = "..";
 
+/// Percentage of a row given to the command, so descriptions line up in a
+/// column rather than restarting wherever the command happens to end.
+const COMMAND_SHARE: usize = 58;
+
 pub fn draw(app: &mut App, frame: &mut Frame) {
     let [query, body, footer] = Layout::vertical([
         Constraint::Length(1),
@@ -160,18 +164,22 @@ fn row_line(
     let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
     let room = width.saturating_sub(used);
 
-    // The description never gets more than half the row, so a long command
-    // cannot squeeze it out entirely and a short one cannot leave a gulf.
-    let wanted = desc.chars().count().min(room / 2);
-    let for_command = room.saturating_sub(wanted + GAP.len());
-    let command = truncate(cmd, for_command);
+    // Both columns start at a fixed offset. Letting the description follow the
+    // command directly would restart it at a different place on every row, which
+    // is what makes a list of varying length commands unreadable.
+    let command_width = (room * COMMAND_SHARE / 100).max(1);
+    let command = truncate(cmd, command_width);
+    let padding = command_width - command.chars().count();
 
-    let spare = room - command.chars().count();
     spans.extend(highlighted(&command, matched, base));
 
-    if spare > GAP.len() && !desc.is_empty() {
-        let description = truncate(desc, spare - GAP.len());
-        spans.push(Span::styled(format!("{GAP}{description}"), dim()));
+    let description_width = room.saturating_sub(command_width + GAP.len());
+    if description_width > ELLIPSIS.len() && !desc.is_empty() {
+        spans.push(Span::raw(" ".repeat(padding)));
+        spans.push(Span::styled(
+            format!("{GAP}{}", truncate(desc, description_width)),
+            dim(),
+        ));
     }
 
     Line::from(spans)

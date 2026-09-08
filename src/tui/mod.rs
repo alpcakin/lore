@@ -68,13 +68,21 @@ fn enter() -> Result<Screen> {
     install_panic_hook();
     enable_raw_mode().context("failed to put the terminal into raw mode")?;
 
-    Terminal::with_options(
+    let mut screen = Terminal::with_options(
         CrosstermBackend::new(terminal_device()?),
         TerminalOptions {
             viewport: Viewport::Inline(HEIGHT),
         },
     )
-    .context("failed to start the terminal backend")
+    .context("failed to start the terminal backend")?;
+
+    // The reserved rows still hold whatever the shell last printed there, and a
+    // blank cell in the first frame matches a blank cell in the empty back
+    // buffer, so the diff would never write over it.
+    screen.clear().context("failed to clear the panel")?;
+    screen.hide_cursor().ok();
+
+    Ok(screen)
 }
 
 /// Erases the panel and leaves the cursor where it began, so the shell carries
