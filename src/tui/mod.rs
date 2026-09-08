@@ -6,7 +6,7 @@ mod view;
 
 pub use app::{App, Outcome};
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::panic;
 use std::time::Duration;
 
@@ -15,6 +15,8 @@ use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::backend::CrosstermBackend;
 use ratatui::{Terminal, TerminalOptions, Viewport};
+
+use crate::console;
 
 type Screen = Terminal<CrosstermBackend<File>>;
 
@@ -31,22 +33,6 @@ pub fn run(mut app: App) -> Result<Outcome> {
     let outcome = event_loop(&mut screen, &mut app);
     leave(&mut screen)?;
     outcome
-}
-
-/// Opens the terminal device itself rather than drawing on an inherited stream.
-///
-/// stdout already belongs to the shell integration, which captures the chosen
-/// command from it. stderr is not a safe alternative either: a PSReadLine key
-/// handler hands the child process a redirected stderr, so drawing there goes
-/// into a pipe and the picker stays invisible while still reading keys.
-fn terminal_device() -> Result<File> {
-    let path = if cfg!(windows) { "CONOUT$" } else { "/dev/tty" };
-
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
-        .with_context(|| format!("failed to open the terminal device ({path})"))
 }
 
 fn event_loop(screen: &mut Screen, app: &mut App) -> Result<Outcome> {
@@ -69,7 +55,7 @@ fn enter() -> Result<Screen> {
     enable_raw_mode().context("failed to put the terminal into raw mode")?;
 
     let mut screen = Terminal::with_options(
-        CrosstermBackend::new(terminal_device()?),
+        CrosstermBackend::new(console::device()?),
         TerminalOptions {
             viewport: Viewport::Inline(HEIGHT),
         },

@@ -9,7 +9,11 @@ if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
 
         $selected = & lore pick --shell powershell --last "$last"
 
-        if ($selected) {
+        if ($LASTEXITCODE -ne 0) {
+            # lore reports its own failures on the terminal. Redraw the prompt so
+            # they are not left sitting on top of it.
+            [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
+        } elseif ($selected) {
             [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
             [Microsoft.PowerShell.PSConsoleReadLine]::Insert(($selected -join ' '))
         }

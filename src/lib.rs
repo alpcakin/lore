@@ -1,6 +1,7 @@
 //! A command library that lives in your shell.
 
 pub mod cli;
+pub mod console;
 pub mod model;
 pub mod params;
 pub mod search;
