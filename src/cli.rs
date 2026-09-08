@@ -3,6 +3,9 @@
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 
+use crate::model::{Entry, ShellFamily};
+use crate::store::{self, definitions};
+
 /// A command library that lives in your shell.
 #[derive(Parser)]
 #[command(name = "lore", version, about)]
@@ -37,7 +40,11 @@ enum Command {
     Save { command: String },
 
     /// List commands without opening the picker.
-    List,
+    List {
+        /// Shell to resolve command variants for.
+        #[arg(long)]
+        shell: Option<Shell>,
+    },
 }
 
 /// Shells that lore ships a keybinding integration for.
@@ -53,6 +60,15 @@ pub enum Shell {
     PowerShell,
 }
 
+impl From<Shell> for ShellFamily {
+    fn from(shell: Shell) -> Self {
+        match shell {
+            Shell::Bash | Shell::Zsh | Shell::Fish => ShellFamily::Posix,
+            Shell::PowerShell => ShellFamily::PowerShell,
+        }
+    }
+}
+
 impl Cli {
     pub fn run(self) -> Result<()> {
         match self.command {
@@ -61,7 +77,52 @@ impl Cli {
             Command::Uninstall => bail!("`uninstall` is not implemented yet"),
             Command::Pick { .. } => bail!("`pick` is not implemented yet"),
             Command::Save { .. } => bail!("`save` is not implemented yet"),
-            Command::List => bail!("`list` is not implemented yet"),
+            Command::List { shell } => list(family(shell)),
         }
     }
+}
+
+/// Falls back to the dialect this build most likely runs under until shell
+/// detection lands with the integration snippets.
+fn family(shell: Option<Shell>) -> ShellFamily {
+    match shell {
+        Some(shell) => shell.into(),
+        None if cfg!(windows) => ShellFamily::PowerShell,
+        None => ShellFamily::Posix,
+    }
+}
+
+fn list(family: ShellFamily) -> Result<()> {
+    let library = store::user_library().ok();
+    let entries = definitions::load(library.as_deref())?;
+
+    for entry in entries.iter().filter(|e| e.cmd_for(family).is_some()) {
+        print(entry, family);
+    }
+
+    Ok(())
+}
+
+fn print(entry: &Entry, family: ShellFamily) {
+    let cmd = entry.cmd_for(family).expect("caller filtered on this");
+    let danger = if entry.danger { "  [destructive]" } else { "" };
+
+    println!("{}{danger}", entry.id);
+    println!("  {}", entry.desc);
+    println!("  {cmd}");
+
+    for name in crate::params::names(cmd) {
+        let desc = entry
+            .params
+            .get(&name)
+            .and_then(|spec| spec.desc.as_deref())
+            .unwrap_or("no description");
+        println!("    <{name}>  {desc}");
+    }
+
+    if !entry.tags.is_empty() {
+        println!("  tags: {}", entry.tags.join(", "));
+    }
+
+    println!();
 }
