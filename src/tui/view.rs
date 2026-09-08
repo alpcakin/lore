@@ -6,6 +6,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
+use crate::model::Layer;
 use crate::params;
 use crate::tui::app::{App, Mode};
 use crate::tui::form::Form;
@@ -25,6 +26,13 @@ const ELLIPSIS: &str = "..";
 /// the dark one close enough to its default foreground to read as no colour at
 /// all.
 const SELECTION: Color = Color::LightYellow;
+
+/// Colour of a row that came with the binary rather than from the user's own
+/// library.
+///
+/// Grey rather than dim, because the description column is dim already and
+/// stacking the two leaves a legacy Windows console with nothing legible.
+const BUILTIN: Color = Color::DarkGray;
 
 /// Width of the selection marker, the pin and destructive slots, and the space
 /// separating them from the command.
@@ -112,6 +120,7 @@ fn draw_list(app: &App, frame: &mut Frame, area: Rect) {
                 desc: row.entry.desc.clone(),
                 danger: row.entry.danger,
                 pinned: row.pinned,
+                layer: row.entry.layer,
             };
             let matched = app.highlight(&text.cmd);
             row_line(&text, &matched, columns)
@@ -128,6 +137,7 @@ struct RowText {
     desc: String,
     danger: bool,
     pinned: bool,
+    layer: Layer,
 }
 
 /// Column widths shared by every row of a frame.
@@ -172,22 +182,29 @@ impl Columns {
 /// or destructive entry does not shunt its own columns out of line with the rest
 /// of the list.
 fn row_line(row: &RowText, matched: &[u32], columns: Columns) -> Line<'static> {
-    // The selected row is carried in one colour from end to end. A wide gap
-    // between a short command and its description otherwise makes the eye travel
-    // the row to work out which belongs to which.
-    let (command_style, description_style, accent) = if row.selected {
-        let selected = Style::new().fg(SELECTION);
-        (
-            selected,
-            selected,
-            selected.add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        )
+    let accent = if row.selected {
+        Style::new()
+            .fg(SELECTION)
+            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
     } else {
-        (
-            Style::new(),
-            dim(),
-            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        )
+        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    };
+
+    // Each row is carried in one colour from end to end. A wide gap between a
+    // short command and its description otherwise makes the eye travel the row
+    // to work out which belongs to which.
+    let (command_style, description_style) = match (row.selected, row.layer) {
+        (true, _) => {
+            let selected = Style::new().fg(SELECTION);
+            (selected, selected)
+        }
+        // The shipped set is a starting point, so it recedes and leaves the
+        // foreground to whatever the user curated.
+        (false, Layer::Builtin) => {
+            let builtin = Style::new().fg(BUILTIN);
+            (builtin, builtin)
+        }
+        (false, Layer::Project | Layer::User) => (Style::new(), dim()),
     };
 
     // Pinning and danger get a slot each. Sharing one would let a preference
@@ -385,7 +402,25 @@ mod tests {
             desc: "Show history".to_string(),
             danger: false,
             pinned: false,
+            layer: Layer::User,
         }
+    }
+
+    fn builtin(selected: bool) -> RowText {
+        RowText {
+            layer: Layer::Builtin,
+            ..row(selected)
+        }
+    }
+
+    fn command_colour(text: &RowText) -> Option<Color> {
+        row_line(text, &[], columns())
+            .spans
+            .iter()
+            .find(|span| span.content.contains("git log"))
+            .expect("the command is drawn")
+            .style
+            .fg
     }
 
     fn columns() -> Columns {
@@ -400,18 +435,18 @@ mod tests {
     /// description.
     #[test]
     fn the_selected_row_is_one_colour_throughout() {
-        let line = row_line(&row(true), &[], columns());
-
-        for span in &line.spans {
-            if span.content.trim().is_empty() {
-                continue;
+        for text in [row(true), builtin(true)] {
+            for span in &row_line(&text, &[], columns()).spans {
+                if span.content.trim().is_empty() {
+                    continue;
+                }
+                assert_eq!(
+                    span.style.fg,
+                    Some(SELECTION),
+                    "{:?} is not part of the selected colour",
+                    span.content
+                );
             }
-            assert_eq!(
-                span.style.fg,
-                Some(SELECTION),
-                "{:?} is not part of the selected colour",
-                span.content
-            );
         }
     }
 
@@ -463,14 +498,14 @@ mod tests {
     }
 
     #[test]
-    fn an_unselected_row_leaves_its_command_alone() {
-        let line = row_line(&row(false), &[], columns());
-        let command = line
-            .spans
-            .iter()
-            .find(|span| span.content.contains("git log"))
-            .expect("the command is drawn");
+    fn a_command_of_your_own_is_drawn_plainly() {
+        assert_eq!(command_colour(&row(false)), None);
+    }
 
-        assert_eq!(command.style.fg, None);
+    /// The shipped set is a starting point rather than the point, so it has to
+    /// be tellable from the user's own library at a glance.
+    #[test]
+    fn a_builtin_recedes_behind_what_the_user_saved() {
+        assert_eq!(command_colour(&builtin(false)), Some(BUILTIN));
     }
 }
