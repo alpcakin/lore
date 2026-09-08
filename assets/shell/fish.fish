@@ -1,6 +1,13 @@
 function __lore_pick
-    set -l last (history --max 1)
-    set -l selected (lore pick --shell fish --last "$last")
+    # Newest first, in a file rather than in arguments: Windows rebuilds a
+    # child's argument list out of one string, so a command ending in a
+    # backslash takes the next one with it. Every shell hands it over the same
+    # way.
+    set -l recent (mktemp)
+    history --max 50 > $recent
+
+    set -l selected (lore pick --shell fish --history $recent)
+    rm -f $recent
 
     if test -n "$selected"
         commandline -r -- $selected

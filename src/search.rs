@@ -115,6 +115,16 @@ pub fn highlight(haystack: &str, query: &str) -> Vec<u32> {
     found
 }
 
+/// Whether `haystack` holds every term in `query`.
+///
+/// The same rule `rank` applies to an entry, so a filter typed over plain text
+/// behaves the way the list does.
+pub fn matches(haystack: &str, query: &str) -> bool {
+    terms(query)
+        .iter()
+        .all(|term| find(haystack, term).is_some())
+}
+
 fn terms(query: &str) -> Vec<String> {
     query
         .split_whitespace()

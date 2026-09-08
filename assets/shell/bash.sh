@@ -1,9 +1,19 @@
 __lore_pick() {
-    local last selected
-    last="$(fc -ln -1 2>/dev/null)"
-    last="${last#"${last%%[![:space:]]*}"}"
+    local selected recent status
 
-    selected="$(lore pick --shell bash --last "$last")" || return
+    # Newest first, in a file rather than in arguments: Windows rebuilds a
+    # child's argument list out of one string, so a command ending in a
+    # backslash takes the next one with it. Every shell hands it over the same
+    # way. A multi-line command still arrives as one entry per line, which fc
+    # gives no way around.
+    recent="$(mktemp)"
+    fc -lnr -50 2>/dev/null | sed 's/^[[:space:]]*//' > "$recent"
+
+    selected="$(lore pick --shell bash --history "$recent")"
+    status=$?
+    rm -f "$recent"
+
+    [ $status -eq 0 ] || return
     [ -n "$selected" ] || return
 
     READLINE_LINE="$selected"

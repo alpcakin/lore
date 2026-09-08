@@ -374,17 +374,33 @@ mod tests {
         }
     }
 
-    /// Windows PowerShell drops an empty string from a native command's
-    /// argument list, so an unguarded `--last` would reach clap without the
-    /// value it requires on the first prompt of a session.
+    /// The history is positional, so a blank entry would not be ignored: it
+    /// would shift every command after it by one. Windows PowerShell drops an
+    /// empty string from a native command's argument list outright.
     #[test]
-    fn powershell_passes_last_only_when_history_has_a_command() {
-        for line in snippet(Shell::PowerShell)
-            .lines()
-            .map(str::trim_start)
-            .filter(|line| !line.starts_with('#') && line.contains("--last"))
-        {
-            assert!(line.starts_with("if ($last)"), "unguarded --last: {line}");
+    fn powershell_drops_blank_history_entries() {
+        let snippet = snippet(Shell::PowerShell);
+        assert!(
+            snippet.contains("Where-Object { $_ }"),
+            "the history reaches lore unfiltered"
+        );
+    }
+
+    /// Windows rebuilds a child's argument list out of a single string, so a
+    /// command ending in a backslash escapes the quote meant to close it. The
+    /// history travels in a file everywhere rather than only where it has to.
+    #[test]
+    fn every_snippet_hands_its_history_over_in_a_file() {
+        for shell in ALL {
+            let snippet = snippet(shell);
+            assert!(
+                snippet.contains("--history"),
+                "{shell:?} does not pass a history file"
+            );
+            assert!(
+                snippet.contains("rm -f") || snippet.contains("Remove-Item"),
+                "{shell:?} leaves its history file behind"
+            );
         }
     }
 

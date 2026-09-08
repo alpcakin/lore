@@ -8,13 +8,15 @@ use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::model::Layer;
 use crate::params;
+use crate::search;
 use crate::tui::app::{App, Mode};
-use crate::tui::form::Form;
+use crate::tui::form::{Choice, Field, Form, Picker};
 
 // The interface stays ASCII only. A legacy Windows console runs on the
 // system code page, where box drawing characters arrive as mojibake.
 const RULE: &str = "-";
 const PROMPT: &str = "find: ";
+const FILTER: &str = "filter: ";
 const SELECTED: &str = "> ";
 const UNSELECTED: &str = "  ";
 const GAP: &str = "   ";
@@ -51,14 +53,27 @@ const DETAIL: u16 = 5;
 /// Most of a row the command column may take, however wide the commands are.
 const COMMAND_CAP: usize = 60;
 
+/// Indent of the form block, and the width its labels are given.
+const INDENT: &str = "  ";
+const LABEL: usize = 14;
+
+/// Widest a form input is drawn, however wide the terminal is.
+///
+/// A rail running the whole width of a large terminal reads as a rule rather
+/// than as somewhere to type.
+const RAIL_MAX: usize = 60;
+
+/// Drawn under a form input so an empty field is still somewhere on the screen.
+const RAIL: &str = "_";
+
 /// Share of the matching commands the column is sized to hold in full.
 const COMMAND_PERCENTILE: usize = 80;
 
 pub fn draw(app: &App, frame: &mut Frame) {
-    // The hints sit above the query so that opening the picker reads top down:
-    // what you can do, then the line you type into, then the results. The blank
-    // row keeps them from being mistaken for part of the query.
-    let [hints, _gap, query, body] = Layout::vertical([
+    // The hints sit above the heading so that opening the picker reads top down:
+    // what you can do, then where you are, then the results. The blank row keeps
+    // them from being mistaken for part of the line below.
+    let [hints, _gap, heading, body] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -67,12 +82,36 @@ pub fn draw(app: &App, frame: &mut Frame) {
     .areas(frame.area());
 
     draw_hints(app, frame, hints);
-    draw_query(app, frame, query);
 
+    // Each screen puts its own one line on the heading row. The query used to be
+    // drawn there in every mode, which left a live looking prompt sitting over a
+    // form that did not accept a word of it.
     match app.mode() {
-        Mode::Browse => draw_browse(app, frame, body),
-        Mode::Params { form, .. } | Mode::Save { form } => draw_form(form, frame, body),
+        Mode::Browse => {
+            draw_query(app, frame, heading);
+            draw_browse(app, frame, body);
+        }
+        Mode::Params { form, .. } | Mode::Save { form } => match &form.picking {
+            Some(picker) => {
+                draw_title(&picker.title, frame, heading);
+                draw_picker(form, picker, frame, body);
+            }
+            None => {
+                draw_title(&form.title, frame, heading);
+                draw_form(form, frame, body);
+            }
+        },
     }
+}
+
+fn draw_title(title: &str, frame: &mut Frame, area: Rect) {
+    let title = Span::styled(title.to_string(), Style::new().add_modifier(Modifier::BOLD));
+    frame.render_widget(Paragraph::new(title), area);
+}
+
+fn draw_rule(frame: &mut Frame, area: Rect) {
+    let rule = Span::styled(RULE.repeat(area.width as usize), dim());
+    frame.render_widget(Paragraph::new(rule), area);
 }
 
 fn draw_query(app: &App, frame: &mut Frame, area: Rect) {
@@ -288,10 +327,7 @@ fn highlighted(text: &str, matched: &[u32], base: Style, accent: Style) -> Vec<S
 
 fn draw_detail(app: &App, frame: &mut Frame, area: Rect) {
     let [rule, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
-    frame.render_widget(
-        Paragraph::new(Span::styled(RULE.repeat(rule.width as usize), dim())),
-        rule,
-    );
+    draw_rule(frame, rule);
 
     let Some(row) = app.selected_row() else {
         let empty = Paragraph::new(Span::styled("Nothing matches that query", dim()));
@@ -331,42 +367,171 @@ fn draw_detail(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn draw_form(form: &Form, frame: &mut Frame, area: Rect) {
-    let mut lines = vec![
-        Line::from(Span::styled(
-            form.title.clone(),
-            Style::new().add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-    ];
+    let [rule, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+    draw_rule(frame, rule);
+
+    let rail = rail_width(body.width);
+    let indent = " ".repeat(INDENT.len() + LABEL);
+    let mut lines = vec![Line::from("")];
+    let mut focused_at = 0;
 
     for (index, field) in form.fields.iter().enumerate() {
-        let focused = index == form.focused;
-        let mut spans = vec![
-            Span::styled(
-                if focused { SELECTED } else { UNSELECTED },
-                Style::new().fg(Color::Cyan),
-            ),
-            Span::styled(format!("{:<14}", field.label), dim()),
-            Span::styled(
-                field.value.clone(),
-                if focused {
-                    Style::new().add_modifier(Modifier::BOLD)
-                } else {
-                    Style::new()
-                },
-            ),
-        ];
-        if focused {
-            spans.push(Span::styled("_", dim()));
+        if index == form.focused {
+            focused_at = lines.len();
         }
-        lines.push(Line::from(spans));
+        lines.push(field_line(field, index == form.focused, rail));
 
         if let Some(hint) = &field.hint {
-            lines.push(Line::from(Span::styled(format!("      {hint}"), dim())));
+            lines.push(Line::from(Span::styled(format!("{indent}{hint}"), dim())));
         }
+        lines.push(Line::from(""));
     }
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+    // A form with enough placeholders to outgrow the panel would otherwise clip
+    // the field being typed into.
+    let scroll = focused_at.saturating_sub(body.height.saturating_sub(1) as usize) as u16;
+    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), body);
+}
+
+/// One field: its label, its value, and a rail running under the rest of the
+/// room it has.
+///
+/// The rail is what makes an empty field a place rather than nothing at all, and
+/// its right edge is where the value stops growing.
+fn field_line(field: &Field, focused: bool, rail: usize) -> Line<'static> {
+    let label = if focused {
+        Style::new().fg(Color::Cyan)
+    } else {
+        dim()
+    };
+
+    let value = tail(&field.value, rail);
+    let filled = value.chars().count();
+
+    let mut spans = vec![
+        Span::raw(INDENT),
+        Span::styled(format!("{:<LABEL$}", field.label), label),
+        Span::styled(
+            value,
+            if focused {
+                Style::new().add_modifier(Modifier::BOLD)
+            } else {
+                Style::new()
+            },
+        ),
+    ];
+
+    // The caret is the one undimmed link in the rail, so the eye lands on where
+    // the next character goes rather than on the run of underscores.
+    if focused && filled < rail {
+        spans.push(Span::raw(RAIL));
+    }
+    let remaining = rail.saturating_sub(filled + usize::from(focused));
+    spans.push(Span::styled(RAIL.repeat(remaining), dim()));
+
+    Line::from(spans)
+}
+
+fn rail_width(width: u16) -> usize {
+    let room = (width as usize).saturating_sub(INDENT.len() * 2 + LABEL);
+    room.clamp(1, RAIL_MAX)
+}
+
+/// The last `width` characters, so a value longer than the rail shows the end
+/// being typed rather than a beginning that no longer moves.
+fn tail(text: &str, width: usize) -> String {
+    let length = text.chars().count();
+    if length <= width {
+        return text.to_string();
+    }
+    match width.checked_sub(ELLIPSIS.len()) {
+        Some(room) => ELLIPSIS.to_string() + &text.chars().skip(length - room).collect::<String>(),
+        None => String::new(),
+    }
+}
+
+/// The values the focused field is offering, with the filter above them.
+fn draw_picker(form: &Form, picker: &Picker, frame: &mut Frame, area: Rect) {
+    let [filter, rule, list] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .areas(area);
+
+    let typed = Line::from(vec![
+        Span::styled(FILTER, Style::new().fg(Color::Cyan)),
+        Span::styled(
+            picker.filter.clone(),
+            Style::new().add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(RAIL, dim()),
+    ]);
+    frame.render_widget(Paragraph::new(typed), filter);
+    draw_rule(frame, rule);
+
+    let choices = form.visible();
+    if choices.is_empty() {
+        let empty = Paragraph::new(Span::styled("Nothing matches that filter", dim()));
+        frame.render_widget(empty, list);
+        return;
+    }
+
+    let height = list.height as usize;
+    let first = picker.selected.saturating_sub(height.saturating_sub(1));
+    let room = (list.width as usize).saturating_sub(SELECTED.len());
+
+    let lines: Vec<Line> = choices
+        .into_iter()
+        .enumerate()
+        .skip(first)
+        .take(height)
+        .map(|(index, choice)| choice_line(choice, index == picker.selected, &picker.filter, room))
+        .collect();
+
+    frame.render_widget(Paragraph::new(lines), list);
+}
+
+/// One offered value, with whatever the caller had to say about it held to the
+/// right of the row.
+fn choice_line(choice: &Choice, selected: bool, filter: &str, room: usize) -> Line<'static> {
+    let base = if selected {
+        Style::new().fg(SELECTION)
+    } else {
+        Style::new()
+    };
+    let accent = if selected {
+        base.add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+    } else {
+        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    };
+
+    let note = choice.note.clone().unwrap_or_default();
+    let width = room.saturating_sub(if note.is_empty() {
+        0
+    } else {
+        note.chars().count() + GAP.len()
+    });
+
+    let value = truncate(&choice.value, width);
+    let padding = width - value.chars().count();
+    let matched = search::highlight(&value, filter);
+
+    let mut spans = vec![Span::styled(
+        if selected { SELECTED } else { UNSELECTED },
+        base,
+    )];
+    spans.extend(highlighted(&value, &matched, base, accent));
+
+    if !note.is_empty() {
+        spans.push(Span::raw(" ".repeat(padding)));
+        spans.push(Span::styled(
+            format!("{GAP}{note}"),
+            if selected { base } else { dim() },
+        ));
+    }
+
+    Line::from(spans)
 }
 
 /// The chords, and whatever the last action had to say.
@@ -403,28 +568,36 @@ fn draw_hints(app: &App, frame: &mut Frame, area: Rect) {
 
 fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
     match app.mode() {
-        Mode::Browse => browse_hints(app.has_last_command()),
+        Mode::Browse => browse_hints(),
+        Mode::Params { form, .. } | Mode::Save { form } if form.picking.is_some() => picker_hints(),
         Mode::Params { .. } => form_hints("back"),
         Mode::Save { .. } => form_hints("cancel"),
     }
 }
 
-fn browse_hints(has_last_command: bool) -> Vec<(&'static str, &'static str)> {
-    let mut hints = vec![
+/// Fixed, whatever the shell handed over. A line that changes shape depending on
+/// what happened before the picker opened cannot be learned.
+fn browse_hints() -> Vec<(&'static str, &'static str)> {
+    vec![
         ("enter", "insert"),
         ("esc", "close"),
-        ("^n", "new"),
+        ("^s", "save"),
         ("^p", "pin"),
         ("^x", "remove"),
-    ];
-    if has_last_command {
-        hints.insert(2, ("^s", "save last"));
-    }
-    hints
+    ]
 }
 
 fn form_hints(escape: &'static str) -> Vec<(&'static str, &'static str)> {
     vec![("enter", "next"), ("esc", escape), ("^u", "clear")]
+}
+
+fn picker_hints() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("enter", "use"),
+        ("esc", "back"),
+        ("type", "filter"),
+        ("^u", "clear"),
+    ]
 }
 
 fn dim() -> Style {
@@ -549,29 +722,103 @@ mod tests {
         assert_eq!(command_colour(&builtin(false)), Some(BUILTIN));
     }
 
-    /// The line clips rather than wraps, so the longest it ever gets has to
-    /// survive the narrowest terminal worth supporting.
+    /// The line clips rather than wraps, so the longest one any screen draws has
+    /// to survive the narrowest terminal worth supporting.
     #[test]
-    fn the_widest_hint_line_fits_a_narrow_terminal() {
-        let hints = browse_hints(true);
-        let width = hints
-            .iter()
-            .map(|(chord, action)| chord.len() + 1 + action.len())
-            .sum::<usize>()
-            + HINT_GAP.len() * (hints.len() - 1);
+    fn no_hint_line_outgrows_a_narrow_terminal() {
+        let lines = [browse_hints(), form_hints("cancel"), picker_hints()];
 
-        assert!(width <= 80, "the hint line is {width} columns");
+        for hints in lines {
+            let width = hints
+                .iter()
+                .map(|(chord, action)| chord.len() + 1 + action.len())
+                .sum::<usize>()
+                + HINT_GAP.len() * (hints.len() - 1);
+
+            assert!(width <= 80, "{hints:?} is {width} columns");
+        }
+    }
+
+    fn field(label: &str, value: &str) -> Field {
+        Field::new(label, value)
+    }
+
+    fn drawn(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    /// A field with nothing in it still has to be somewhere on the screen.
+    #[test]
+    fn an_empty_field_is_drawn_as_a_rail() {
+        let line = field_line(&field("description", ""), false, 10);
+        assert_eq!(drawn(&line), format!("  {:<14}__________", "description"));
+    }
+
+    /// The caret is the one part of the rail the eye is meant to land on, so it
+    /// stays out of the dim run the rest of the rail is drawn in.
+    #[test]
+    fn the_focused_field_holds_a_caret_at_the_end_of_its_value() {
+        let line = field_line(&field("command", "ls"), true, 10);
+
+        assert_eq!(drawn(&line), format!("  {:<14}ls________", "command"));
+        let caret = line
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == RAIL)
+            .expect("the caret is drawn");
+        assert!(!caret.style.add_modifier.contains(Modifier::DIM));
+    }
+
+    /// The rail is a fixed width, so a long value has to give up its beginning
+    /// rather than the end being typed.
+    #[test]
+    fn a_value_longer_than_the_rail_shows_its_end() {
+        assert_eq!(tail("kubectl logs -f api-0", 10), "..-f api-0");
+        assert_eq!(tail("ls", 10), "ls");
     }
 
     #[test]
-    fn saving_the_last_command_is_offered_only_when_there_is_one() {
-        let offered = |has_last| {
-            browse_hints(has_last)
-                .iter()
-                .any(|(_, action)| *action == "save last")
-        };
+    fn the_rail_never_outgrows_its_maximum() {
+        assert_eq!(rail_width(500), RAIL_MAX);
+        assert!(rail_width(30) < RAIL_MAX);
+        assert!(rail_width(0) >= 1);
+    }
 
-        assert!(offered(true));
-        assert!(!offered(false));
+    fn choice(note: Option<&str>) -> Choice {
+        Choice::new("git log --oneline", note.map(str::to_string))
+    }
+
+    #[test]
+    fn a_choice_carries_its_note_at_the_end_of_the_row() {
+        let line = choice_line(&choice(Some("already saved")), false, "", 40);
+        let drawn = drawn(&line);
+
+        assert!(
+            drawn.starts_with("  git log --oneline"),
+            "drawn as {drawn:?}"
+        );
+        assert!(drawn.ends_with("already saved"), "drawn as {drawn:?}");
+    }
+
+    /// The same rule the list follows: one colour from end to end, so the eye
+    /// does not travel the gap to pair a row with its note.
+    #[test]
+    fn the_selected_choice_is_one_colour_throughout() {
+        let line = choice_line(&choice(Some("already saved")), true, "", 40);
+
+        for span in &line.spans {
+            if span.content.trim().is_empty() {
+                continue;
+            }
+            assert_eq!(
+                span.style.fg,
+                Some(SELECTION),
+                "{:?} is not part of the selected colour",
+                span.content
+            );
+        }
     }
 }

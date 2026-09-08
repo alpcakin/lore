@@ -12,7 +12,19 @@ use crate::params;
 use crate::search::{self, Candidate};
 use crate::store::definitions::{self, NewEntry};
 use crate::store::stats::{Score, Stats};
-use crate::tui::form::{Field, Form};
+use crate::tui::form::{Choice, Field, Form};
+
+/// Commands from the shell's history the save screen offers.
+///
+/// Deep enough to reach past a run of throwaway commands, short enough that the
+/// list stays something you scan rather than search.
+const HISTORY_LIMIT: usize = 50;
+
+/// Heading over the shell history when it is being browsed.
+const HISTORY_TITLE: &str = "Recent commands";
+
+/// Note against a history entry the library already holds.
+const ALREADY_SAVED: &str = "already saved";
 
 /// What the picker hands back to the shell.
 #[derive(Debug, PartialEq, Eq)]
@@ -48,7 +60,8 @@ pub struct App {
     stats: Stats,
     scores: HashMap<String, Score>,
     library: PathBuf,
-    last_command: Option<String>,
+    /// What the shell last ran, newest first, offered when saving.
+    history: Vec<String>,
     /// Entry the next ctrl+x will actually remove.
     armed_to_remove: Option<String>,
     now: i64,
@@ -60,7 +73,7 @@ impl App {
         family: ShellFamily,
         stats: Stats,
         library: PathBuf,
-        last_command: Option<String>,
+        history: Vec<String>,
         now: i64,
     ) -> Result<Self> {
         let scores = stats.scores(now)?;
@@ -76,7 +89,7 @@ impl App {
             stats,
             scores,
             library,
-            last_command,
+            history: prepare_history(history),
             armed_to_remove: None,
             now,
         };
@@ -94,10 +107,6 @@ impl App {
 
     pub fn status(&self) -> Option<&str> {
         self.status.as_deref()
-    }
-
-    pub fn has_last_command(&self) -> bool {
-        self.last_command.is_some()
     }
 
     pub fn selected(&self) -> usize {
@@ -141,6 +150,12 @@ impl App {
 
         match &mut self.mode {
             Mode::Browse => self.browse_key(key, control, armed),
+            // A form showing its list is driven entirely by the list until one
+            // of its rows is taken or the list is dismissed.
+            Mode::Params { form, .. } | Mode::Save { form } if form.picking.is_some() => {
+                picker_key(form, key, control);
+                Ok(None)
+            }
             Mode::Params { .. } => self.params_key(key, control),
             Mode::Save { .. } => self.save_key(key, control),
         }
@@ -165,8 +180,7 @@ impl App {
             KeyCode::PageDown => self.move_by(10),
 
             KeyCode::Char('p') if control => self.toggle_pin()?,
-            KeyCode::Char('s') if control => self.begin_save_last(),
-            KeyCode::Char('n') if control => self.begin_save_new(),
+            KeyCode::Char('s') if control => self.begin_save(),
             KeyCode::Char('x') if control => self.remove(armed)?,
 
             KeyCode::Char('u') if control => {
@@ -199,7 +213,13 @@ impl App {
                     return self.finish_params();
                 }
             }
-            KeyCode::BackTab | KeyCode::Up => form.retreat(),
+            KeyCode::Up => {
+                let label = form.fields[form.focused].label.clone();
+                if !form.open_picker(format!("Values for <{label}>")) {
+                    form.retreat();
+                }
+            }
+            KeyCode::BackTab => form.retreat(),
             KeyCode::Char('u') if control => form.clear(),
             KeyCode::Backspace => form.backspace(),
             KeyCode::Char(character) if !control => form.insert(character),
@@ -221,7 +241,12 @@ impl App {
                     self.finish_save()?;
                 }
             }
-            KeyCode::BackTab | KeyCode::Up => form.retreat(),
+            KeyCode::Up => {
+                if !form.open_picker(HISTORY_TITLE) {
+                    form.retreat();
+                }
+            }
+            KeyCode::BackTab => form.retreat(),
             KeyCode::Char('u') if control => form.clear(),
             KeyCode::Backspace => form.backspace(),
             KeyCode::Char(character) if !control => form.insert(character),
@@ -303,25 +328,39 @@ impl App {
         Ok(Some(Outcome::Insert(command)))
     }
 
-    fn begin_save_last(&mut self) {
-        match self.last_command.clone() {
-            Some(command) => self.begin_save(command),
-            None => {
-                self.status = Some("No previous command was passed in by the shell".to_string());
-            }
-        }
-    }
+    /// Opens the save screen on the last command the shell ran.
+    ///
+    /// The rest of the history sits behind the command field rather than behind
+    /// a second chord, so saving something from further back costs a keystroke
+    /// rather than a different way in.
+    fn begin_save(&mut self) {
+        let saved: BTreeSet<&str> = self
+            .entries
+            .iter()
+            .filter_map(|entry| entry.cmd_for(self.family))
+            .collect();
 
-    fn begin_save_new(&mut self) {
-        self.begin_save(String::new());
-    }
+        let choices = self
+            .history
+            .iter()
+            .map(|command| {
+                let note = saved
+                    .contains(command.as_str())
+                    .then(|| ALREADY_SAVED.to_string());
+                Choice::new(command.clone(), note)
+            })
+            .collect();
 
-    fn begin_save(&mut self, command: String) {
+        let command = self.history.first().cloned().unwrap_or_default();
+        let hint = (!self.history.is_empty()).then(|| "up for history".to_string());
+
         self.mode = Mode::Save {
             form: Form::new(
                 "Save a command",
                 vec![
-                    Field::new("command", command),
+                    Field::new("command", command)
+                        .with_hint(hint)
+                        .with_choices(choices),
                     Field::new("description", ""),
                     Field::new("tags", "").with_hint(Some("comma separated".to_string())),
                 ],
@@ -477,6 +516,42 @@ impl App {
     }
 }
 
+/// Drives a form's list of offered values.
+///
+/// A free function rather than a method: the caller is already holding the form
+/// out of the mode it lives in.
+fn picker_key(form: &mut Form, key: KeyEvent, control: bool) {
+    match key.code {
+        KeyCode::Esc => form.cancel_pick(),
+        KeyCode::Enter | KeyCode::Tab => form.accept_pick(),
+
+        KeyCode::Up => form.move_pick(-1),
+        KeyCode::Down => form.move_pick(1),
+        KeyCode::PageUp => form.move_pick(-10),
+        KeyCode::PageDown => form.move_pick(10),
+
+        KeyCode::Char('u') if control => form.filter_clear(),
+        KeyCode::Backspace => form.filter_backspace(),
+        KeyCode::Char(character) if !control => form.filter_insert(character),
+        _ => {}
+    }
+}
+
+/// Trims what the shell handed over, drops blanks and repeats, and caps the
+/// list.
+///
+/// A shell history is mostly the same handful of commands run again and again,
+/// and a list where nine rows in ten are `cd ..` is not worth opening.
+fn prepare_history(raw: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+
+    raw.into_iter()
+        .map(|command| command.trim().to_string())
+        .filter(|command| !command.is_empty() && seen.insert(command.clone()))
+        .take(HISTORY_LIMIT)
+        .collect()
+}
+
 /// One line of the picker.
 pub struct Row<'a> {
     pub entry: &'a Entry,
@@ -516,6 +591,10 @@ mod tests {
     }
 
     fn app_with(entries: Vec<Entry>) -> App {
+        app_with_history(entries, vec!["kics scan -p .".to_string()])
+    }
+
+    fn app_with_history(entries: Vec<Entry>, history: Vec<String>) -> App {
         let library = std::env::temp_dir().join(format!(
             "lore-app-{}-{:?}.yaml",
             std::process::id(),
@@ -527,10 +606,21 @@ mod tests {
             ShellFamily::Posix,
             Stats::in_memory().unwrap(),
             library,
-            Some("kics scan -p .".to_string()),
+            history,
             0,
         )
         .unwrap()
+    }
+
+    fn history_sample() -> App {
+        app_with_history(
+            vec![entry("git.log", "git log --oneline", "Show history")],
+            vec![
+                "kics scan -p .".to_string(),
+                "docker compose up -d".to_string(),
+                "git log --oneline".to_string(),
+            ],
+        )
     }
 
     fn sample() -> App {
@@ -698,7 +788,7 @@ mod tests {
     }
 
     #[test]
-    fn saving_the_last_command_adds_it_to_the_library() {
+    fn saving_seeds_the_form_with_the_last_command() {
         let mut app = sample();
         app.on_key(ctrl('s')).unwrap();
 
@@ -737,14 +827,150 @@ mod tests {
         assert!(app.status().unwrap().contains("description"));
     }
 
+    /// The shell having nothing to offer is not an error. The field is still
+    /// there to be typed into.
     #[test]
-    fn saving_without_a_command_from_the_shell_says_so() {
-        let mut app = app_with(vec![entry("git.log", "git log", "Show history")]);
-        app.last_command = None;
+    fn an_empty_history_still_opens_the_save_form() {
+        let mut app = app_with_history(
+            vec![entry("git.log", "git log", "Show history")],
+            Vec::new(),
+        );
         app.on_key(ctrl('s')).unwrap();
 
-        assert!(matches!(app.mode(), Mode::Browse));
-        assert!(app.status().unwrap().contains("No previous command"));
+        let Mode::Save { form } = app.mode() else {
+            panic!("expected the save form");
+        };
+        assert_eq!(form.fields[0].value, "");
+        assert!(form.fields[0].choices.is_empty());
+        assert!(form.fields[0].hint.is_none());
+        assert!(app.status().is_none());
+    }
+
+    #[test]
+    fn a_repeated_or_blank_history_entry_is_dropped() {
+        let prepared = prepare_history(vec![
+            "  git status  ".to_string(),
+            "   ".to_string(),
+            "cd ..".to_string(),
+            "git status".to_string(),
+        ]);
+
+        assert_eq!(
+            prepared,
+            vec!["git status".to_string(), "cd ..".to_string()]
+        );
+    }
+
+    #[test]
+    fn the_history_is_capped() {
+        let raw: Vec<String> = (0..HISTORY_LIMIT + 10)
+            .map(|n| format!("cmd {n}"))
+            .collect();
+        assert_eq!(prepare_history(raw).len(), HISTORY_LIMIT);
+    }
+
+    #[test]
+    fn up_on_the_command_field_opens_the_history() {
+        let mut app = history_sample();
+        app.on_key(ctrl('s')).unwrap();
+        app.on_key(key(KeyCode::Up)).unwrap();
+
+        let Mode::Save { form } = app.mode() else {
+            panic!("expected the save form");
+        };
+        let picker = form.picking.as_ref().expect("the history is open");
+        assert_eq!(picker.title, HISTORY_TITLE);
+        assert_eq!(picker.selected, 0);
+        assert_eq!(form.visible().len(), 3);
+    }
+
+    #[test]
+    fn a_history_entry_already_in_the_library_says_so() {
+        let mut app = history_sample();
+        app.on_key(ctrl('s')).unwrap();
+
+        let Mode::Save { form } = app.mode() else {
+            panic!("expected the save form");
+        };
+        let notes: Vec<Option<&str>> = form.fields[0]
+            .choices
+            .iter()
+            .map(|choice| choice.note.as_deref())
+            .collect();
+
+        assert_eq!(notes, vec![None, None, Some(ALREADY_SAVED)]);
+    }
+
+    #[test]
+    fn choosing_from_the_history_fills_the_command_field() {
+        let mut app = history_sample();
+        app.on_key(ctrl('s')).unwrap();
+        app.on_key(key(KeyCode::Up)).unwrap();
+        app.on_key(key(KeyCode::Down)).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+
+        let Mode::Save { form } = app.mode() else {
+            panic!("expected the save form");
+        };
+        assert!(form.picking.is_none());
+        assert_eq!(form.fields[0].value, "docker compose up -d");
+        assert_eq!(form.focused, 0, "the form stays where it was");
+    }
+
+    #[test]
+    fn escaping_the_history_leaves_the_command_field_alone() {
+        let mut app = history_sample();
+        app.on_key(ctrl('s')).unwrap();
+        app.on_key(key(KeyCode::Up)).unwrap();
+        app.on_key(key(KeyCode::Down)).unwrap();
+        app.on_key(key(KeyCode::Esc)).unwrap();
+
+        let Mode::Save { form } = app.mode() else {
+            panic!("expected the save form, not a cancelled one");
+        };
+        assert!(form.picking.is_none());
+        assert_eq!(form.fields[0].value, "kics scan -p .");
+    }
+
+    #[test]
+    fn typing_in_the_history_filters_it() {
+        let mut app = history_sample();
+        app.on_key(ctrl('s')).unwrap();
+        app.on_key(key(KeyCode::Up)).unwrap();
+        typed(&mut app, "docker");
+
+        let Mode::Save { form } = app.mode() else {
+            panic!("expected the save form");
+        };
+        assert_eq!(form.visible().len(), 1);
+
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        let Mode::Save { form } = app.mode() else {
+            panic!("expected the save form");
+        };
+        assert_eq!(form.fields[0].value, "docker compose up -d");
+    }
+
+    /// Only the command field has a list, so the other two keep the movement
+    /// that key has everywhere else in the form.
+    #[test]
+    fn up_on_a_field_without_a_list_still_goes_back_a_field() {
+        let mut app = history_sample();
+        app.on_key(ctrl('s')).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+
+        let Mode::Save { form } = app.mode() else {
+            panic!("expected the save form");
+        };
+        assert_eq!(form.focused, 2);
+
+        app.on_key(key(KeyCode::Up)).unwrap();
+        let Mode::Save { form } = app.mode() else {
+            panic!("expected the save form");
+        };
+        assert!(form.picking.is_none());
+        assert_eq!(form.focused, 1);
     }
 
     #[test]

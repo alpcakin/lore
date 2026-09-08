@@ -2,14 +2,25 @@
 # so the binding is skipped rather than failing at startup.
 if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
     Set-PSReadLineKeyHandler -Chord 'Ctrl+g' -ScriptBlock {
-        # Windows PowerShell drops an empty string from a native command's
-        # argument list, so passing one would leave --last without the value it
-        # requires. A session with no history yet has nothing to offer anyway.
-        $arguments = @('--shell', 'powershell')
-        $last = (Get-History -Count 1).CommandLine
-        if ($last) { $arguments += @('--last', $last) }
+        # Newest first, in a file rather than in arguments. Windows hands a
+        # child one string and lets it split its own arguments, so `cd C:\dir\`
+        # escapes the quote meant to close it and swallows the command after it.
+        # Blanks are dropped because Windows PowerShell removes an empty string
+        # from an argument list outright.
+        $recent = [IO.Path]::GetTempFileName()
 
-        $selected = & lore pick @arguments
+        try {
+            $commands = @(Get-History -Count 50 | ForEach-Object { $_.CommandLine } | Where-Object { $_ })
+            [array]::Reverse($commands)
+
+            # Explicit UTF-8 without a mark: the default here is the console
+            # code page, which loses anything outside it.
+            [IO.File]::WriteAllLines($recent, $commands, (New-Object Text.UTF8Encoding $false))
+
+            $selected = & lore pick --shell powershell --history $recent
+        } finally {
+            Remove-Item $recent -Force -ErrorAction SilentlyContinue
+        }
 
         if ($LASTEXITCODE -ne 0) {
             # lore reports its own failures on the terminal. Redraw the prompt so

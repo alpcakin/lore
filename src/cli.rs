@@ -1,6 +1,8 @@
 //! Command line surface.
 
 use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
@@ -49,12 +51,14 @@ enum Command {
         #[arg(long)]
         shell: Option<Shell>,
 
-        /// Command most recently run in the calling shell, offered for saving.
-        // A history entry can begin with a hyphen, and clap would otherwise
-        // reject it as an unknown flag. Every snippet passes this last, so
-        // nothing else can be swallowed by it.
-        #[arg(long, allow_hyphen_values = true)]
-        last: Option<String>,
+        /// File of the calling shell's recent commands, newest first, one a
+        /// line.
+        // A file rather than arguments. Windows hands a child one string and
+        // lets it split its own arguments, so a command ending in a backslash
+        // escapes the quote that was meant to close it and swallows whatever
+        // came next. `cd C:\\projects\\` is enough to do it.
+        #[arg(long)]
+        history: Option<PathBuf>,
     },
 
     /// Save a command to the user library without opening the picker.
@@ -87,7 +91,7 @@ impl Cli {
             }
             Command::Setup { shell, yes } => shell::install(resolve(shell)?, yes),
             Command::Uninstall { shell } => shell::uninstall(resolve(shell)?),
-            Command::Pick { shell, last } => pick(family(shell), last),
+            Command::Pick { shell, history } => pick(family(shell), history.as_deref()),
             Command::Save {
                 command,
                 desc,
@@ -116,18 +120,34 @@ fn family(shell: Option<Shell>) -> ShellFamily {
 ///
 /// Only the command goes to stdout: the shell integration captures it and puts
 /// it in the prompt. Pressing enter on it stays the user's decision.
-fn pick(family: ShellFamily, last: Option<String>) -> Result<()> {
-    let last = last.filter(|command| !command.trim().is_empty());
+fn pick(family: ShellFamily, history: Option<&Path>) -> Result<()> {
     let library = store::user_library()?;
     let entries = definitions::load(Some(&library))?;
     let stats = Stats::open(&store::stats_database()?)?;
 
-    let app = App::new(entries, family, stats, library, last, stats::now())?;
+    let history = read_history(history);
+    let app = App::new(entries, family, stats, library, history, stats::now())?;
     if let Outcome::Insert(command) = crate::tui::run(app)? {
         println!("{command}");
     }
 
     Ok(())
+}
+
+/// The shell's recent commands, or nothing at all.
+///
+/// A history that cannot be read is not worth refusing to open the picker over:
+/// everything else it does still works without one.
+fn read_history(path: Option<&Path>) -> Vec<String> {
+    let Some(path) = path else {
+        return Vec::new();
+    };
+
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
 }
 
 fn save(command: String, desc: String, tags: Option<String>) -> Result<()> {
@@ -196,26 +216,56 @@ fn print(entry: &Entry, family: ShellFamily) {
 mod tests {
     use super::*;
 
-    fn last_of(arguments: &[&str]) -> Option<String> {
+    fn history_of(arguments: &[&str]) -> Option<PathBuf> {
         match Cli::try_parse_from(arguments)
             .expect("arguments should parse")
             .command
         {
-            Command::Pick { last, .. } => last,
+            Command::Pick { history, .. } => history,
             _ => panic!("expected pick"),
         }
     }
 
     #[test]
-    fn a_previous_command_beginning_with_a_hyphen_is_still_a_value() {
+    fn omitting_the_history_is_allowed() {
+        assert!(history_of(&["lore", "pick", "--shell", "powershell"]).is_none());
+        assert!(read_history(None).is_empty());
+    }
+
+    /// The reason the history travels in a file. Every one of these survives
+    /// being written to disk and read back, and none of them survives being
+    /// rebuilt out of a Windows command line.
+    #[test]
+    fn a_history_file_carries_commands_an_argument_list_cannot() {
+        let path = std::env::temp_dir().join(format!("lore-history-{}.txt", std::process::id()));
+        let written = "cd C:\\projects\\\ngit commit -m \"fix the thing\"\n-Verbose\n";
+        fs::write(&path, written).unwrap();
+
         assert_eq!(
-            last_of(&["lore", "pick", "--shell", "bash", "--last", "-Verbose"]),
-            Some("-Verbose".to_string())
+            history_of(&[
+                "lore",
+                "pick",
+                "--shell",
+                "powershell",
+                "--history",
+                path.to_str().unwrap()
+            ]),
+            Some(path.clone())
         );
+        assert_eq!(
+            read_history(Some(&path)),
+            vec![
+                "cd C:\\projects\\".to_string(),
+                "git commit -m \"fix the thing\"".to_string(),
+                "-Verbose".to_string(),
+            ]
+        );
+
+        let _ = fs::remove_file(&path);
     }
 
     #[test]
-    fn omitting_the_previous_command_is_allowed() {
-        assert_eq!(last_of(&["lore", "pick", "--shell", "powershell"]), None);
+    fn an_unreadable_history_leaves_the_picker_openable() {
+        assert!(read_history(Some(Path::new("no-such-file-anywhere"))).is_empty());
     }
 }
