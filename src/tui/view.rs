@@ -30,6 +30,12 @@ const SELECTION: Color = Color::LightYellow;
 /// separating them from the command.
 const MARKERS: usize = 5;
 
+/// Rows the detail pane always occupies: a rule and four lines of content.
+///
+/// Enough for a command that wraps once, its description, and a placeholder or
+/// two. Anything past that is clipped rather than allowed to move the list.
+const DETAIL: u16 = 5;
+
 /// Most of a row the command column may take, however wide the commands are.
 const COMMAND_CAP: usize = 60;
 
@@ -67,26 +73,15 @@ fn draw_query(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn draw_browse(app: &mut App, frame: &mut Frame, area: Rect) {
-    let detail = detail_height(app).min(area.height.saturating_sub(1));
+    // Fixed rather than sized to the selected entry. Letting it grow for an
+    // entry with placeholders would change how many rows the list has every time
+    // the cursor moved, and the ground would shift under what is being read.
+    let detail = DETAIL.min(area.height.saturating_sub(1));
     let [list, detail] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(detail)]).areas(area);
 
     draw_list(app, frame, list);
     draw_detail(app, frame, detail);
-}
-
-/// The panel is short, so the detail pane only claims the rows it will fill.
-fn detail_height(app: &App) -> u16 {
-    let Some(row) = app.selected_row() else {
-        return 2;
-    };
-
-    let rule = 1;
-    let command_and_description = 2;
-    let warning = u16::from(row.entry.danger);
-    let placeholders = params::names(row.cmd).len() as u16;
-
-    rule + command_and_description + warning + placeholders
 }
 
 fn draw_list(app: &mut App, frame: &mut Frame, area: Rect) {
