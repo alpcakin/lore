@@ -19,9 +19,11 @@ const UNSELECTED: &str = "  ";
 const GAP: &str = "   ";
 const ELLIPSIS: &str = "..";
 
-/// Percentage of a row given to the command, so descriptions line up in a
-/// column rather than restarting wherever the command happens to end.
-const COMMAND_SHARE: usize = 58;
+/// Width of the selection marker plus the pin or destructive marker.
+const MARKERS: usize = 4;
+
+/// Most of a row the command column may take, however wide the commands are.
+const COMMAND_CAP: usize = 60;
 
 pub fn draw(app: &mut App, frame: &mut Frame) {
     let [query, body, footer] = Layout::vertical([
@@ -93,91 +95,110 @@ fn draw_list(app: &mut App, frame: &mut Frame, area: Rect) {
     // Keep the cursor on screen without letting the window jump around.
     let first = app.selected().saturating_sub(height.saturating_sub(1));
 
-    let visible: Vec<(usize, String, String, bool, bool)> = app
+    let selected = app.selected();
+    let visible: Vec<RowText> = app
         .rows()
         .enumerate()
         .skip(first)
         .take(height)
-        .map(|(index, row)| {
-            (
-                index,
-                row.cmd.to_string(),
-                row.entry.desc.clone(),
-                row.entry.danger,
-                row.pinned,
-            )
+        .map(|(index, row)| RowText {
+            selected: index == selected,
+            cmd: row.cmd.to_string(),
+            desc: row.entry.desc.clone(),
+            danger: row.entry.danger,
+            pinned: row.pinned,
         })
         .collect();
 
-    let selected = app.selected();
-    let width = area.width as usize;
+    let columns = Columns::fit(&visible, area.width as usize);
     let lines: Vec<Line> = visible
         .into_iter()
-        .map(|(index, cmd, desc, danger, pinned)| {
-            let matched = app.highlight(&cmd);
-            row_line(
-                index == selected,
-                &cmd,
-                &desc,
-                danger,
-                pinned,
-                &matched,
-                width,
-            )
+        .map(|row| {
+            let matched = app.highlight(&row.cmd);
+            row_line(&row, &matched, columns)
         })
         .collect();
 
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// One row: markers, the command, then as much of the description as fits.
-///
-/// Both halves are truncated deliberately rather than left to run off the right
-/// edge, where the description would be the part lost every time.
-fn row_line(
+/// One row's content, gathered before drawing so the list can size its columns
+/// against everything that is actually on screen.
+struct RowText {
     selected: bool,
-    cmd: &str,
-    desc: &str,
+    cmd: String,
+    desc: String,
     danger: bool,
     pinned: bool,
-    matched: &[u32],
-    width: usize,
-) -> Line<'static> {
-    let base = if selected {
+}
+
+/// Column widths shared by every row of a frame.
+#[derive(Clone, Copy)]
+struct Columns {
+    command: usize,
+    room: usize,
+}
+
+impl Columns {
+    /// Sizes the command column to the widest command on screen rather than to a
+    /// fixed share, so a list of short commands does not waste half the row and
+    /// truncate every description for nothing.
+    fn fit(rows: &[RowText], width: usize) -> Self {
+        let room = width.saturating_sub(MARKERS);
+        let cap = (room * COMMAND_CAP / 100).max(1);
+        let widest = rows
+            .iter()
+            .map(|row| row.cmd.chars().count())
+            .max()
+            .unwrap_or(0);
+
+        Self {
+            command: widest.clamp(1, cap),
+            room,
+        }
+    }
+
+    fn description(&self) -> usize {
+        self.room.saturating_sub(self.command + GAP.len())
+    }
+}
+
+/// One row: a marker column, then the command and description columns.
+///
+/// The markers occupy a fixed width whether or not the row has any, so a pinned
+/// or destructive entry does not shunt its own columns out of line with the rest
+/// of the list.
+fn row_line(row: &RowText, matched: &[u32], columns: Columns) -> Line<'static> {
+    let base = if row.selected {
         Style::new().add_modifier(Modifier::BOLD)
     } else {
         Style::new()
     };
 
-    let mut spans = vec![Span::styled(
-        if selected { SELECTED } else { UNSELECTED },
-        Style::new().fg(Color::Cyan),
-    )];
+    let (status, status_style) = if row.danger {
+        ("! ", Style::new().fg(Color::Red))
+    } else if row.pinned {
+        ("* ", Style::new().fg(Color::Yellow))
+    } else {
+        ("  ", Style::new())
+    };
 
-    if pinned {
-        spans.push(Span::styled("* ", Style::new().fg(Color::Yellow)));
-    }
-    if danger {
-        spans.push(Span::styled("! ", Style::new().fg(Color::Red)));
-    }
+    let mut spans = vec![
+        Span::styled(
+            if row.selected { SELECTED } else { UNSELECTED },
+            Style::new().fg(Color::Cyan),
+        ),
+        Span::styled(status, status_style),
+    ];
 
-    let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
-    let room = width.saturating_sub(used);
-
-    // Both columns start at a fixed offset. Letting the description follow the
-    // command directly would restart it at a different place on every row, which
-    // is what makes a list of varying length commands unreadable.
-    let command_width = (room * COMMAND_SHARE / 100).max(1);
-    let command = truncate(cmd, command_width);
-    let padding = command_width - command.chars().count();
-
+    let command = truncate(&row.cmd, columns.command);
+    let padding = columns.command - command.chars().count();
     spans.extend(highlighted(&command, matched, base));
 
-    let description_width = room.saturating_sub(command_width + GAP.len());
-    if description_width > ELLIPSIS.len() && !desc.is_empty() {
+    if columns.description() > ELLIPSIS.len() && !row.desc.is_empty() {
         spans.push(Span::raw(" ".repeat(padding)));
         spans.push(Span::styled(
-            format!("{GAP}{}", truncate(desc, description_width)),
+            format!("{GAP}{}", truncate(&row.desc, columns.description())),
             dim(),
         ));
     }
