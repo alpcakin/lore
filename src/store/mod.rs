@@ -1,6 +1,7 @@
 //! On-disk locations and readers for everything lore persists.
 
 pub mod definitions;
+pub mod stats;
 
 use std::path::PathBuf;
 
