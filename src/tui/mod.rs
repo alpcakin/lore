@@ -8,6 +8,7 @@ pub use app::{App, Outcome};
 
 use std::io::{self, Stderr};
 use std::panic;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyEventKind};
@@ -58,9 +59,23 @@ fn enter() -> Result<Screen> {
 }
 
 fn leave(screen: &mut Screen) -> Result<()> {
+    drain_input();
     restore();
     screen.show_cursor().ok();
     Ok(())
+}
+
+/// Throws away input the picker did not consume.
+///
+/// Windows queues a release record for every press, and a key held down repeats.
+/// Anything still queued when raw mode ends is handed to the shell, which reads
+/// it as if the user had typed it at the prompt.
+fn drain_input() {
+    while event::poll(Duration::ZERO).unwrap_or(false) {
+        if event::read().is_err() {
+            return;
+        }
+    }
 }
 
 /// Leaves the terminal as it was found. Safe to call more than once.
