@@ -1,9 +1,17 @@
 //! Filtering and ordering the command list.
 //!
+//! A query is split on whitespace and every term has to be found as a
+//! contiguous run of characters. Letting the letters of one term scatter across
+//! a field fills the list with entries that share nothing with what was typed:
+//! `git` otherwise matches `Get-ChildItem` through its g, i and t.
+//!
+//! Scattered matching survives only as a fallback for a query that finds nothing
+//! at all, where a mistyped guess beats an empty list.
+//!
 //! Match quality is the primary sort key and is deliberately coarse. Fine
-//! grained fuzzy scores would reorder neighbouring entries for reasons the user
-//! cannot see, and a picker whose order cannot be predicted breaks the muscle
-//! memory it exists to serve. Frecency only breaks ties inside a bucket.
+//! grained scores reorder neighbouring entries for reasons the user cannot see,
+//! and a picker whose order cannot be predicted breaks the muscle memory it
+//! exists to serve. Frecency only breaks ties inside a bucket.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -24,11 +32,13 @@ pub struct Candidate<'a> {
 /// How closely a field matched. Ordered weakest to strongest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Quality {
-    /// The query appears only as a scattered subsequence.
-    Fuzzy,
-    /// The query starts a word inside the field.
+    /// The term appears only as a scattered subsequence, from the fallback pass.
+    Scattered,
+    /// The term appears somewhere inside a word.
+    Inside,
+    /// The term starts a word.
     WordStart,
-    /// The field starts with the query.
+    /// The field starts with the term.
     Prefix,
 }
 
@@ -48,7 +58,7 @@ struct Rank {
     /// user is searching, a builtin may well be exactly what they want.
     layer: Option<Layer>,
     frecency: f64,
-    fuzzy: u32,
+    tiebreak: u32,
 }
 
 pub struct Ranker {
@@ -77,24 +87,54 @@ impl Ranker {
         scores: &HashMap<String, Score>,
         query: &str,
     ) -> Vec<usize> {
-        let query = query.trim();
-        let pattern = (!query.is_empty()).then(|| {
-            Pattern::new(
-                query,
-                CaseMatching::Smart,
-                Normalization::Smart,
-                AtomKind::Fuzzy,
-            )
-        });
+        let terms = terms(query);
+        if terms.is_empty() {
+            return self.order(candidates, scores, |_, _| Some((None, 0)));
+        }
 
-        let mut ranked: Vec<(usize, Rank)> = candidates
-            .iter()
-            .enumerate()
-            .filter_map(|(index, candidate)| {
-                let rank = self.rank_one(candidate, scores, query, pattern.as_ref())?;
-                Some((index, rank))
-            })
-            .collect();
+        let found = self.order(candidates, scores, |_, candidate| {
+            all_terms(candidate, &terms).map(|quality| (Some(quality), 0))
+        });
+        if !found.is_empty() {
+            return found;
+        }
+
+        // Nothing contained what was typed, so loosen off rather than showing an
+        // empty panel.
+        let pattern = fuzzy_pattern(query);
+        self.order(candidates, scores, |ranker, candidate| {
+            ranker
+                .scattered(candidate, &pattern)
+                .map(|(field, score)| (Some((Quality::Scattered, field)), score))
+        })
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn order(
+        &mut self,
+        candidates: &[Candidate<'_>],
+        scores: &HashMap<String, Score>,
+        assess: impl Fn(&mut Self, &Candidate<'_>) -> Option<(Option<(Quality, Field)>, u32)>,
+    ) -> Vec<usize> {
+        let mut ranked: Vec<(usize, Rank)> = Vec::with_capacity(candidates.len());
+
+        for (index, candidate) in candidates.iter().enumerate() {
+            let Some((quality, tiebreak)) = assess(self, candidate) else {
+                continue;
+            };
+            let score = scores.get(&candidate.entry.id);
+
+            ranked.push((
+                index,
+                Rank {
+                    quality,
+                    pinned: score.is_some_and(|s| s.pinned),
+                    layer: quality.is_none().then_some(candidate.entry.layer),
+                    frecency: score.map(|s| s.value).unwrap_or_default(),
+                    tiebreak,
+                },
+            ));
+        }
 
         ranked.sort_by(|(left_index, left), (right_index, right)| {
             compare(left, right).then_with(|| {
@@ -110,39 +150,7 @@ impl Ranker {
         ranked.into_iter().map(|(index, _)| index).collect()
     }
 
-    fn rank_one(
-        &mut self,
-        candidate: &Candidate<'_>,
-        scores: &HashMap<String, Score>,
-        query: &str,
-        pattern: Option<&Pattern>,
-    ) -> Option<Rank> {
-        let score = scores.get(&candidate.entry.id);
-
-        let (quality, fuzzy) = match pattern {
-            None => (None, 0),
-            Some(pattern) => {
-                let best = self.best_field(candidate, query, pattern)?;
-                (Some((best.0, best.1)), best.2)
-            }
-        };
-
-        Some(Rank {
-            quality,
-            pinned: score.is_some_and(|s| s.pinned),
-            layer: pattern.is_none().then_some(candidate.entry.layer),
-            frecency: score.map(|s| s.value).unwrap_or_default(),
-            fuzzy,
-        })
-    }
-
-    /// The strongest match across the searchable fields, if any field matched.
-    fn best_field(
-        &mut self,
-        candidate: &Candidate<'_>,
-        query: &str,
-        pattern: &Pattern,
-    ) -> Option<(Quality, Field, u32)> {
+    fn scattered(&mut self, candidate: &Candidate<'_>, pattern: &Pattern) -> Option<(Field, u32)> {
         let tags = candidate.entry.tags.join(" ");
         let fields = [
             (Field::Cmd, candidate.cmd),
@@ -153,68 +161,129 @@ impl Ranker {
         fields
             .into_iter()
             .filter_map(|(field, haystack)| {
-                let fuzzy =
+                let score =
                     pattern.score(Utf32Str::new(haystack, &mut self.buffer), &mut self.matcher)?;
-                Some((quality_of(haystack, query), field, fuzzy))
+                Some((field, score))
             })
-            .max_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)))
+            .max_by_key(|(field, score)| (*field, *score))
     }
 
-    /// Character positions in `haystack` that `query` matched, for highlighting.
+    /// Character positions in `haystack` that the query matched, for
+    /// highlighting.
     ///
     /// Called only for the rows actually on screen, so its cost does not scale
     /// with the size of the library.
     pub fn highlight(&mut self, haystack: &str, query: &str) -> Vec<u32> {
-        let query = query.trim();
-        if query.is_empty() {
+        let terms = terms(query);
+        if terms.is_empty() {
             return Vec::new();
         }
 
-        let pattern = Pattern::new(
-            query,
-            CaseMatching::Smart,
-            Normalization::Smart,
-            AtomKind::Fuzzy,
-        );
-        let mut indices = Vec::new();
-        pattern.indices(
-            Utf32Str::new(haystack, &mut self.buffer),
-            &mut self.matcher,
-            &mut indices,
-        );
-        indices.sort_unstable();
-        indices.dedup();
-        indices
-    }
-}
+        let mut found: Vec<u32> = terms
+            .iter()
+            .filter_map(|term| find(haystack, term))
+            .flat_map(|(_, covered)| covered)
+            .collect();
 
-fn compare(left: &Rank, right: &Rank) -> Ordering {
-    right
-        .quality
-        .cmp(&left.quality)
-        .then(right.pinned.cmp(&left.pinned))
-        .then(right.layer.cmp(&left.layer))
-        .then(right.frecency.total_cmp(&left.frecency))
-        .then(right.fuzzy.cmp(&left.fuzzy))
-}
-
-fn quality_of(haystack: &str, query: &str) -> Quality {
-    if starts_with_ignore_case(haystack, query) {
-        return Quality::Prefix;
-    }
-
-    let mut previous = ' ';
-    for (offset, current) in haystack.char_indices() {
-        if !previous.is_alphanumeric()
-            && current.is_alphanumeric()
-            && starts_with_ignore_case(&haystack[offset..], query)
-        {
-            return Quality::WordStart;
+        if found.is_empty() {
+            let pattern = fuzzy_pattern(query);
+            pattern.indices(
+                Utf32Str::new(haystack, &mut self.buffer),
+                &mut self.matcher,
+                &mut found,
+            );
         }
-        previous = current;
+
+        found.sort_unstable();
+        found.dedup();
+        found
+    }
+}
+
+fn fuzzy_pattern(query: &str) -> Pattern {
+    Pattern::new(
+        query.trim(),
+        CaseMatching::Smart,
+        Normalization::Smart,
+        AtomKind::Fuzzy,
+    )
+}
+
+fn terms(query: &str) -> Vec<String> {
+    query
+        .split_whitespace()
+        .map(|term| term.to_lowercase())
+        .collect()
+}
+
+/// The weakest match among the terms, or `None` if any term is missing.
+///
+/// Taking the weakest is what keeps an entry that only mentions one term in its
+/// tags below an entry whose command contains them all.
+fn all_terms(candidate: &Candidate<'_>, terms: &[String]) -> Option<(Quality, Field)> {
+    let tags = candidate.entry.tags.join(" ");
+    let fields = [
+        (Field::Cmd, candidate.cmd),
+        (Field::Desc, candidate.entry.desc.as_str()),
+        (Field::Tags, tags.as_str()),
+    ];
+
+    terms
+        .iter()
+        .map(|term| {
+            fields
+                .iter()
+                .filter_map(|(field, haystack)| {
+                    quality_of(haystack, term).map(|quality| (quality, *field))
+                })
+                .max()
+        })
+        .try_fold(None, |weakest: Option<(Quality, Field)>, best| {
+            let best = best?;
+            Some(Some(match weakest {
+                Some(weakest) => weakest.min(best),
+                None => best,
+            }))
+        })
+        .flatten()
+}
+
+fn quality_of(haystack: &str, term: &str) -> Option<Quality> {
+    let (at, _) = find(haystack, term)?;
+
+    if at == 0 {
+        return Some(Quality::Prefix);
+    }
+    if starts_word(haystack, at) {
+        return Some(Quality::WordStart);
+    }
+    Some(Quality::Inside)
+}
+
+/// The byte offset where `needle` first occurs, with the character positions it
+/// covers.
+fn find(haystack: &str, needle: &str) -> Option<(usize, Vec<u32>)> {
+    if needle.is_empty() {
+        return None;
     }
 
-    Quality::Fuzzy
+    let length = needle.chars().count();
+    haystack
+        .char_indices()
+        .enumerate()
+        .find(|(_, (offset, _))| starts_with_ignore_case(&haystack[*offset..], needle))
+        .map(|(position, (offset, _))| {
+            let covered = (position..position + length).map(|n| n as u32).collect();
+            (offset, covered)
+        })
+}
+
+/// Whether the character before `at` ends a word, making `at` the start of one.
+fn starts_word(haystack: &str, at: usize) -> bool {
+    haystack[..at]
+        .chars()
+        .next_back()
+        .is_none_or(|previous| !previous.is_alphanumeric())
 }
 
 fn starts_with_ignore_case(haystack: &str, needle: &str) -> bool {
@@ -229,6 +298,16 @@ fn starts_with_ignore_case(haystack: &str, needle: &str) -> bool {
             _ => {}
         }
     }
+}
+
+fn compare(left: &Rank, right: &Rank) -> Ordering {
+    right
+        .quality
+        .cmp(&left.quality)
+        .then(right.pinned.cmp(&left.pinned))
+        .then(right.layer.cmp(&left.layer))
+        .then(right.frecency.total_cmp(&left.frecency))
+        .then(right.tiebreak.cmp(&left.tiebreak))
 }
 
 #[cfg(test)]
@@ -325,8 +404,7 @@ mod tests {
     #[test]
     fn an_empty_query_puts_user_entries_before_builtins() {
         let entries = sample();
-        let ranked = order(&entries, &HashMap::new(), "");
-        assert_eq!(ranked[0], "git.push");
+        assert_eq!(order(&entries, &HashMap::new(), "")[0], "git.push");
     }
 
     #[test]
@@ -346,12 +424,88 @@ mod tests {
     }
 
     #[test]
+    fn scattered_letters_do_not_count_as_a_match() {
+        let entries = vec![
+            entry(
+                "sys.list",
+                "Get-ChildItem -Path <dir> -Recurse",
+                "Find files under a directory",
+                &[],
+                Layer::Builtin,
+            ),
+            entry(
+                "git.log",
+                "git log --oneline",
+                "Show history",
+                &[],
+                Layer::Builtin,
+            ),
+        ];
+        // Get-ChildItem carries a g, an i and a t, but never "git" together.
+        assert_eq!(order(&entries, &HashMap::new(), "git"), ["git.log"]);
+    }
+
+    #[test]
+    fn every_term_has_to_be_found() {
+        let entries = vec![
+            entry(
+                "git.clean",
+                "git clean -nfdx",
+                "Preview a clean",
+                &[],
+                Layer::Builtin,
+            ),
+            entry(
+                "git.log",
+                "git log --oneline",
+                "Show history",
+                &[],
+                Layer::Builtin,
+            ),
+        ];
+        assert_eq!(order(&entries, &HashMap::new(), "git cl"), ["git.clean"]);
+    }
+
+    #[test]
+    fn terms_may_land_in_different_fields() {
+        let entries = vec![entry(
+            "docker.logs",
+            "docker logs -f <container>",
+            "Follow the output of a running container",
+            &["debug"],
+            Layer::Builtin,
+        )];
+        // "docker" from the command, "running" from the description.
+        assert_eq!(
+            order(&entries, &HashMap::new(), "docker running"),
+            ["docker.logs"]
+        );
+    }
+
+    #[test]
+    fn a_term_inside_a_word_still_matches() {
+        let entries = sample();
+        assert_eq!(order(&entries, &HashMap::new(), "onelin"), ["git.log"]);
+    }
+
+    #[test]
+    fn a_query_that_matches_nothing_falls_back_to_scattered_letters() {
+        let entries = sample();
+        // No entry contains "dps", but docker ps spells it out in order.
+        assert_eq!(order(&entries, &HashMap::new(), "dps"), ["docker.ps"]);
+    }
+
+    #[test]
+    fn the_fallback_still_reports_nothing_for_a_hopeless_query() {
+        let entries = sample();
+        assert!(order(&entries, &HashMap::new(), "zzzzq").is_empty());
+    }
+
+    #[test]
     fn match_quality_outranks_frecency() {
         let entries = sample();
-        // docker.ps is heavily used, but only git commands start with "git".
         let scores = scored(&[("docker.ps", 500.0)]);
         let ranked = order(&entries, &scores, "git");
-        assert!(ranked.starts_with(&["git.log"]) || ranked.starts_with(&["git.push"]));
         assert!(!ranked.contains(&"docker.ps"));
     }
 
@@ -373,7 +527,6 @@ mod tests {
                 Layer::Builtin,
             ),
         ];
-        // Both match, but only the builtin starts with the query.
         assert_eq!(
             order(&entries, &HashMap::new(), "kubectl get")[0],
             "builtin.kubectl"
@@ -443,21 +596,16 @@ mod tests {
     }
 
     #[test]
-    fn a_word_start_outranks_a_scattered_match() {
+    fn a_word_start_outranks_a_match_inside_a_word() {
         let entries = vec![
-            entry(
-                "scattered",
-                // "pod" appears only scattered across "port-forward doc".
-                "kubectl port-forward doc",
-                "",
-                &[],
-                Layer::Builtin,
-            ),
-            entry("word.start", "kubectl get pods", "", &[], Layer::Builtin),
+            // "arg" is buried in the middle of "cargo".
+            entry("inside", "cargo build --release", "", &[], Layer::Builtin),
+            // "arg" opens a word of its own.
+            entry("word.start", "git argocd sync", "", &[], Layer::Builtin),
         ];
         assert_eq!(
-            order(&entries, &HashMap::new(), "pod"),
-            ["word.start", "scattered"]
+            order(&entries, &HashMap::new(), "arg"),
+            ["word.start", "inside"]
         );
     }
 
@@ -465,8 +613,21 @@ mod tests {
     fn ordering_is_stable_when_nothing_distinguishes_entries() {
         let entries = sample();
         let first = order(&entries, &HashMap::new(), "");
-        let second = order(&entries, &HashMap::new(), "");
-        assert_eq!(first, second);
+        assert_eq!(first, order(&entries, &HashMap::new(), ""));
+    }
+
+    #[test]
+    fn highlight_marks_the_term_it_found() {
+        let mut ranker = Ranker::new();
+        assert_eq!(ranker.highlight("docker ps", "ps"), [7, 8]);
+        assert_eq!(ranker.highlight("docker ps", "docker"), [0, 1, 2, 3, 4, 5]);
+        assert!(ranker.highlight("docker ps", "").is_empty());
+    }
+
+    #[test]
+    fn highlight_falls_back_with_the_search() {
+        let mut ranker = Ranker::new();
+        assert_eq!(ranker.highlight("docker ps", "dps"), [0, 7, 8]);
     }
 
     /// Not an assertion: timing thresholds are flaky on shared runners. Run it
@@ -494,20 +655,12 @@ mod tests {
         for query in ["", "k", "ku", "kub", "kube", "pods", "get pods", "zzz"] {
             let started = std::time::Instant::now();
             let ranked = ranker.rank(&candidates, &scores, query);
-            let elapsed = started.elapsed();
             println!(
                 "query {:>9?}: {:>5} matches in {:>8.3?}",
                 query,
                 ranked.len(),
-                elapsed
+                started.elapsed()
             );
         }
-    }
-
-    #[test]
-    fn highlight_reports_matched_positions() {
-        let mut ranker = Ranker::new();
-        assert_eq!(ranker.highlight("docker ps", "dps"), [0, 7, 8]);
-        assert!(ranker.highlight("docker ps", "").is_empty());
     }
 }
