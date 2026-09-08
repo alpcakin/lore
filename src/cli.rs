@@ -114,6 +114,7 @@ fn family(shell: Option<Shell>) -> ShellFamily {
 /// Only the command goes to stdout: the shell integration captures it and puts
 /// it in the prompt. Pressing enter on it stays the user's decision.
 fn pick(family: ShellFamily, last: Option<String>) -> Result<()> {
+    let last = last.filter(|command| !command.trim().is_empty());
     let library = store::user_library()?;
     let entries = definitions::load(Some(&library))?;
     let stats = Stats::open(&store::stats_database()?)?;
@@ -186,4 +187,24 @@ fn print(entry: &Entry, family: ShellFamily) {
     }
 
     println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn last_of(arguments: &[&str]) -> Option<String> {
+        match Cli::try_parse_from(arguments)
+            .expect("arguments should parse")
+            .command
+        {
+            Command::Pick { last, .. } => last,
+            _ => panic!("expected pick"),
+        }
+    }
+
+    #[test]
+    fn omitting_the_previous_command_is_allowed() {
+        assert_eq!(last_of(&["lore", "pick", "--shell", "powershell"]), None);
+    }
 }

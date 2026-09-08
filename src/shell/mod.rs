@@ -374,6 +374,20 @@ mod tests {
         }
     }
 
+    /// Windows PowerShell drops an empty string from a native command's
+    /// argument list, so an unguarded `--last` would reach clap without the
+    /// value it requires on the first prompt of a session.
+    #[test]
+    fn powershell_passes_last_only_when_history_has_a_command() {
+        for line in snippet(Shell::PowerShell)
+            .lines()
+            .map(str::trim_start)
+            .filter(|line| !line.starts_with('#') && line.contains("--last"))
+        {
+            assert!(line.starts_with("if ($last)"), "unguarded --last: {line}");
+        }
+    }
+
     #[test]
     fn every_shell_knows_how_to_load_its_snippet() {
         for shell in ALL {
