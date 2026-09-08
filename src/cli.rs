@@ -50,7 +50,10 @@ enum Command {
         shell: Option<Shell>,
 
         /// Command most recently run in the calling shell, offered for saving.
-        #[arg(long)]
+        // A history entry can begin with a hyphen, and clap would otherwise
+        // reject it as an unknown flag. Every snippet passes this last, so
+        // nothing else can be swallowed by it.
+        #[arg(long, allow_hyphen_values = true)]
         last: Option<String>,
     },
 
@@ -201,6 +204,14 @@ mod tests {
             Command::Pick { last, .. } => last,
             _ => panic!("expected pick"),
         }
+    }
+
+    #[test]
+    fn a_previous_command_beginning_with_a_hyphen_is_still_a_value() {
+        assert_eq!(
+            last_of(&["lore", "pick", "--shell", "bash", "--last", "-Verbose"]),
+            Some("-Verbose".to_string())
+        );
     }
 
     #[test]
