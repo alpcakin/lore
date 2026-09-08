@@ -19,6 +19,13 @@ const UNSELECTED: &str = "  ";
 const GAP: &str = "   ";
 const ELLIPSIS: &str = "..";
 
+/// Colour carried across the selected row.
+///
+/// The bright shade rather than plain yellow: a legacy Windows console renders
+/// the dark one close enough to its default foreground to read as no colour at
+/// all.
+const SELECTION: Color = Color::LightYellow;
+
 /// Width of the selection marker plus the pin or destructive marker.
 const MARKERS: usize = 4;
 
@@ -181,7 +188,7 @@ fn row_line(row: &RowText, matched: &[u32], columns: Columns) -> Line<'static> {
     // between a short command and its description otherwise makes the eye travel
     // the row to work out which belongs to which.
     let (command_style, description_style, accent) = if row.selected {
-        let selected = Style::new().fg(Color::Yellow);
+        let selected = Style::new().fg(SELECTION);
         (
             selected,
             selected,
@@ -375,4 +382,58 @@ fn draw_footer(app: &App, frame: &mut Frame, area: Rect) {
 
 fn dim() -> Style {
     Style::new().add_modifier(Modifier::DIM)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(selected: bool) -> RowText {
+        RowText {
+            selected,
+            cmd: "git log".to_string(),
+            desc: "Show history".to_string(),
+            danger: false,
+            pinned: false,
+        }
+    }
+
+    fn columns() -> Columns {
+        Columns {
+            command: 20,
+            room: 60,
+        }
+    }
+
+    /// Every visible piece of the selected row carries the same colour, so the
+    /// eye does not have to travel the gap to pair a command with its
+    /// description.
+    #[test]
+    fn the_selected_row_is_one_colour_throughout() {
+        let line = row_line(&row(true), &[], columns());
+
+        for span in &line.spans {
+            if span.content.trim().is_empty() {
+                continue;
+            }
+            assert_eq!(
+                span.style.fg,
+                Some(SELECTION),
+                "{:?} is not part of the selected colour",
+                span.content
+            );
+        }
+    }
+
+    #[test]
+    fn an_unselected_row_leaves_its_command_alone() {
+        let line = row_line(&row(false), &[], columns());
+        let command = line
+            .spans
+            .iter()
+            .find(|span| span.content.contains("git log"))
+            .expect("the command is drawn");
+
+        assert_eq!(command.style.fg, None);
+    }
 }
