@@ -591,13 +591,11 @@ fn form_hints(escape: &'static str) -> Vec<(&'static str, &'static str)> {
     vec![("enter", "next"), ("esc", escape), ("^u", "clear")]
 }
 
+/// `^u` still empties the filter, as it does every other line of text, but it
+/// is left off the line: browsing offers it no more than this does, and `clear`
+/// above a list of commands reads as an offer to throw the list away.
 fn picker_hints() -> Vec<(&'static str, &'static str)> {
-    vec![
-        ("enter", "use"),
-        ("esc", "back"),
-        ("type", "filter"),
-        ("^u", "clear"),
-    ]
+    vec![("enter", "use"), ("esc", "back"), ("type", "filter")]
 }
 
 fn dim() -> Style {
