@@ -22,11 +22,14 @@ if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
             Remove-Item $recent -Force -ErrorAction SilentlyContinue
         }
 
-        if ($LASTEXITCODE -ne 0) {
-            # lore reports its own failures on the terminal. Redraw the prompt so
-            # they are not left sitting on top of it.
-            [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
-        } elseif ($selected) {
+        # The picker draws over the prompt and erases it on the way out, leaving
+        # the cursor on the row the prompt belongs on. PSReadLine renders the
+        # edit buffer and nothing else, so the prompt is put back here; the row
+        # is passed because a panel that scrolled the screen, or a message lore
+        # printed, moved it away from where PSReadLine last saw it.
+        [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt($null, [Console]::CursorTop)
+
+        if ($LASTEXITCODE -eq 0 -and $selected) {
             [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
             [Microsoft.PowerShell.PSConsoleReadLine]::Insert(($selected -join ' '))
         }

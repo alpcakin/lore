@@ -386,6 +386,26 @@ mod tests {
         );
     }
 
+    /// The panel is drawn over the prompt row and erased on the way out, so the
+    /// prompt has to be put back by hand. Redrawing it only when lore failed
+    /// left an accepted command rendered on a bare row with no prompt in front
+    /// of it.
+    #[test]
+    fn powershell_redraws_the_prompt_on_every_path() {
+        let snippet = snippet(Shell::PowerShell);
+        let redraw = snippet
+            .find("InvokePrompt")
+            .expect("the prompt is never redrawn");
+        let insert = snippet.find("Insert(").expect("nothing is ever inserted");
+
+        assert_eq!(
+            snippet.matches("InvokePrompt").count(),
+            1,
+            "the prompt is redrawn on one path only"
+        );
+        assert!(redraw < insert, "the prompt lands on top of the insertion");
+    }
+
     /// Windows rebuilds a child's argument list out of a single string, so a
     /// command ending in a backslash escapes the quote meant to close it. The
     /// history travels in a file everywhere rather than only where it has to.
