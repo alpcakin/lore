@@ -1,13 +1,13 @@
 //! Command line surface.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 
-use crate::model::{Entry, ShellFamily};
+use crate::model::{CommandBody, Entry, ShellFamily};
 use crate::shell::chord::{self, Chord};
 use crate::shell::{self, Shell};
 use crate::store::definitions::{self, NewEntry};
@@ -170,14 +170,11 @@ fn save(command: String, desc: String, tags: Option<String>) -> Result<()> {
 
     let entry = NewEntry {
         id: definitions::suggest_id(&command, &taken),
-        cmd: command,
+        cmd: CommandBody::Shared(command),
         desc,
-        tags: tags
-            .unwrap_or_default()
-            .split(',')
-            .map(|tag| tag.trim().to_string())
-            .filter(|tag| !tag.is_empty())
-            .collect(),
+        tags: definitions::parse_tags(&tags.unwrap_or_default()),
+        params: BTreeMap::new(),
+        danger: false,
     };
 
     let stats = Stats::open(&store::stats_database()?)?;

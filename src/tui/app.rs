@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::model::{Entry, Layer, ShellFamily};
+use crate::model::{CommandBody, Entry, Layer, ParamSpec, ShellFamily};
 use crate::params;
 use crate::search::{self, Candidate};
 use crate::store::definitions::{self, NewEntry};
@@ -42,6 +42,19 @@ pub enum Mode {
         form: Form,
     },
     Save {
+        form: Form,
+    },
+    /// Rewriting an entry in place. Everything the form does not show is
+    /// carried through untouched, so editing a description cannot lose a
+    /// per shell variant or a placeholder's documentation.
+    Edit {
+        id: String,
+        cmd: CommandBody,
+        params: BTreeMap<String, ParamSpec>,
+        danger: bool,
+        /// A builtin is rewritten as a user entry that shadows it rather than
+        /// changed where it lives.
+        shadowing: bool,
         form: Form,
     },
 }
@@ -158,6 +171,7 @@ impl App {
             }
             Mode::Params { .. } => self.params_key(key, control),
             Mode::Save { .. } => self.save_key(key, control),
+            Mode::Edit { .. } => self.edit_key(key, control),
         }
     }
 
@@ -181,6 +195,7 @@ impl App {
 
             KeyCode::Char('p') if control => self.toggle_pin()?,
             KeyCode::Char('s') if control => self.begin_save(),
+            KeyCode::Char('e') if control => self.begin_edit(),
             KeyCode::Char('x') if control => self.remove(armed)?,
 
             KeyCode::Char('u') if control => {
@@ -247,6 +262,28 @@ impl App {
                 }
             }
             KeyCode::BackTab => form.retreat(),
+            KeyCode::Char('u') if control => form.clear(),
+            KeyCode::Backspace => form.backspace(),
+            KeyCode::Char(character) if !control => form.insert(character),
+            _ => {}
+        }
+
+        Ok(None)
+    }
+
+    fn edit_key(&mut self, key: KeyEvent, control: bool) -> Result<Option<Outcome>> {
+        let Mode::Edit { form, .. } = &mut self.mode else {
+            return Ok(None);
+        };
+
+        match key.code {
+            KeyCode::Esc => self.mode = Mode::Browse,
+            KeyCode::Enter | KeyCode::Tab | KeyCode::Down => {
+                if form.advance() {
+                    self.finish_edit()?;
+                }
+            }
+            KeyCode::Up | KeyCode::BackTab => form.retreat(),
             KeyCode::Char('u') if control => form.clear(),
             KeyCode::Backspace => form.backspace(),
             KeyCode::Char(character) if !control => form.insert(character),
@@ -375,12 +412,7 @@ impl App {
 
         let command = form.value(0).to_string();
         let description = form.value(1).to_string();
-        let tags: Vec<String> = form
-            .value(2)
-            .split(',')
-            .map(|tag| tag.trim().to_string())
-            .filter(|tag| !tag.is_empty())
-            .collect();
+        let tags = definitions::parse_tags(form.value(2));
 
         if command.is_empty() {
             self.status = Some("A command is required".to_string());
@@ -399,9 +431,11 @@ impl App {
         let taken: BTreeSet<String> = self.entries.iter().map(|e| e.id.clone()).collect();
         let entry = NewEntry {
             id: definitions::suggest_id(&command, &taken),
-            cmd: command,
+            cmd: CommandBody::Shared(command),
             desc: description,
             tags,
+            params: BTreeMap::new(),
+            danger: false,
         };
         let id = entry.id.clone();
 
@@ -415,6 +449,102 @@ impl App {
         self.reindex();
         self.select_id(&id);
         self.status = Some(format!("Saved as {id}"));
+
+        Ok(())
+    }
+
+    /// Opens the edit screen on the selected entry.
+    ///
+    /// The id is not offered: changing it would orphan everything the usage
+    /// statistics have learned about the entry, and the entry can be removed
+    /// and saved again if it really needs a different one.
+    fn begin_edit(&mut self) {
+        let Some(row) = self.selected_row() else {
+            return;
+        };
+        let entry = row.entry;
+
+        let form = Form::new(
+            format!("Edit {}", entry.id),
+            vec![
+                Field::new("command", row.cmd.to_string()),
+                Field::new("description", entry.desc.clone()),
+                Field::new("tags", entry.tags.join(", "))
+                    .with_hint(Some("comma separated".to_string())),
+            ],
+        );
+
+        self.mode = Mode::Edit {
+            id: entry.id.clone(),
+            cmd: entry.cmd.clone(),
+            params: entry.params.clone(),
+            danger: entry.danger,
+            shadowing: entry.layer != Layer::User,
+            form,
+        };
+    }
+
+    fn finish_edit(&mut self) -> Result<()> {
+        let Mode::Edit {
+            id,
+            cmd,
+            params,
+            danger,
+            shadowing,
+            form,
+        } = &self.mode
+        else {
+            return Ok(());
+        };
+
+        let command = form.value(0).to_string();
+        let description = form.value(1).to_string();
+
+        if command.is_empty() {
+            self.status = Some("A command is required".to_string());
+            return Ok(());
+        }
+        if description.is_empty() {
+            self.status = Some("A description is required to find this later".to_string());
+            if let Mode::Edit { form, .. } = &mut self.mode {
+                form.focused = 1;
+            }
+            return Ok(());
+        }
+
+        // Only the variant for the shell being used is replaced. The others
+        // were never on screen and are none of this edit's business.
+        let cmd = match cmd {
+            CommandBody::Shared(_) => CommandBody::Shared(command),
+            CommandBody::PerShell(variants) => {
+                let mut variants = variants.clone();
+                variants.insert(self.family, command);
+                CommandBody::PerShell(variants)
+            }
+        };
+
+        let entry = NewEntry {
+            id: id.clone(),
+            cmd,
+            desc: description,
+            tags: definitions::parse_tags(form.value(2)),
+            params: params.clone(),
+            danger: *danger,
+        };
+        let id = entry.id.clone();
+        let shadowing = *shadowing;
+
+        definitions::upsert(&self.library, &entry)?;
+
+        self.entries = definitions::load(Some(&self.library))?;
+        self.mode = Mode::Browse;
+        self.reindex();
+        self.select_id(&id);
+        self.status = Some(if shadowing {
+            format!("Saved {id} to your library, overriding the builtin")
+        } else {
+            format!("Updated {id}")
+        });
 
         Ok(())
     }
@@ -999,6 +1129,106 @@ mod tests {
         typed(app, description);
         app.on_key(key(KeyCode::Enter)).unwrap();
         app.on_key(key(KeyCode::Enter)).unwrap();
+    }
+
+    #[test]
+    fn editing_opens_on_what_the_entry_already_says() {
+        let mut app = sample();
+        let selected = app.selected_row().unwrap();
+        let id = selected.entry.id.clone();
+        let cmd = selected.cmd.to_string();
+        let desc = selected.entry.desc.clone();
+        app.on_key(ctrl('e')).unwrap();
+
+        let Mode::Edit { form, .. } = app.mode() else {
+            panic!("expected the edit form");
+        };
+        assert!(form.title.contains(&id), "the title never names the entry");
+        assert_eq!(form.fields[0].value, cmd);
+        assert_eq!(form.fields[1].value, desc);
+    }
+
+    #[test]
+    fn editing_rewrites_the_entry_and_leaves_it_selected() {
+        let mut app = app_with(vec![Entry {
+            layer: Layer::User,
+            ..entry("user.kics", "kics scan -p .", "Scan this project")
+        }]);
+        definitions::append(
+            &app.library,
+            &NewEntry {
+                id: "user.kics".to_string(),
+                cmd: CommandBody::Shared("kics scan -p .".to_string()),
+                desc: "Scan this project".to_string(),
+                tags: Vec::new(),
+                params: BTreeMap::new(),
+                danger: false,
+            },
+        )
+        .unwrap();
+
+        app.on_key(ctrl('e')).unwrap();
+        typed(&mut app, " --report-formats json");
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+
+        assert!(matches!(app.mode(), Mode::Browse));
+        assert_eq!(app.status(), Some("Updated user.kics"));
+
+        let edited = app.selected_row().unwrap();
+        assert_eq!(edited.entry.id, "user.kics");
+        assert_eq!(edited.cmd, "kics scan -p . --report-formats json");
+
+        let _ = std::fs::remove_file(&app.library);
+    }
+
+    /// A builtin cannot be rewritten inside the binary, so the edit lands in the
+    /// user's own library under the same id and shadows it from there.
+    #[test]
+    fn editing_a_builtin_writes_an_override_the_user_owns() {
+        let mut app = app_with(vec![entry("git.log", "git log --oneline", "Show history")]);
+
+        app.on_key(ctrl('e')).unwrap();
+        typed(&mut app, " --graph");
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+
+        assert!(app.status().unwrap().contains("overriding the builtin"));
+
+        let text = std::fs::read_to_string(&app.library).unwrap();
+        assert!(text.contains("id: git.log"), "wrote {text:?}");
+        assert!(text.contains("--graph"), "wrote {text:?}");
+
+        let _ = std::fs::remove_file(&app.library);
+    }
+
+    #[test]
+    fn editing_refuses_an_entry_nobody_could_find_later() {
+        let mut app = sample();
+        app.on_key(ctrl('e')).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        app.on_key(ctrl('u')).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+
+        assert!(matches!(app.mode(), Mode::Edit { .. }));
+        assert!(app.status().unwrap().contains("description"));
+    }
+
+    #[test]
+    fn leaving_the_edit_form_changes_nothing() {
+        let mut app = sample();
+        app.on_key(ctrl('e')).unwrap();
+        typed(&mut app, " --graph");
+        app.on_key(key(KeyCode::Esc)).unwrap();
+
+        assert!(matches!(app.mode(), Mode::Browse));
+        assert!(
+            !app.library.exists(),
+            "an abandoned edit still wrote a file"
+        );
     }
 
     #[test]

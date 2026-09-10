@@ -91,16 +91,18 @@ pub fn draw(app: &App, frame: &mut Frame) {
             draw_query(app, frame, heading);
             draw_browse(app, frame, body);
         }
-        Mode::Params { form, .. } | Mode::Save { form } => match &form.picking {
-            Some(picker) => {
-                draw_title(&picker.title, frame, heading);
-                draw_picker(form, picker, frame, body);
+        Mode::Params { form, .. } | Mode::Save { form } | Mode::Edit { form, .. } => {
+            match &form.picking {
+                Some(picker) => {
+                    draw_title(&picker.title, frame, heading);
+                    draw_picker(form, picker, frame, body);
+                }
+                None => {
+                    draw_title(&form.title, frame, heading);
+                    draw_form(form, frame, body);
+                }
             }
-            None => {
-                draw_title(&form.title, frame, heading);
-                draw_form(form, frame, body);
-            }
-        },
+        }
     }
 }
 
@@ -569,9 +571,13 @@ fn draw_hints(app: &App, frame: &mut Frame, area: Rect) {
 fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
     match app.mode() {
         Mode::Browse => browse_hints(),
-        Mode::Params { form, .. } | Mode::Save { form } if form.picking.is_some() => picker_hints(),
+        Mode::Params { form, .. } | Mode::Save { form } | Mode::Edit { form, .. }
+            if form.picking.is_some() =>
+        {
+            picker_hints()
+        }
         Mode::Params { .. } => form_hints("back"),
-        Mode::Save { .. } => form_hints("cancel"),
+        Mode::Save { .. } | Mode::Edit { .. } => form_hints("cancel"),
     }
 }
 
@@ -582,6 +588,7 @@ fn browse_hints() -> Vec<(&'static str, &'static str)> {
         ("enter", "insert"),
         ("esc", "close"),
         ("^s", "save"),
+        ("^e", "edit"),
         ("^p", "pin"),
         ("^x", "remove"),
     ]

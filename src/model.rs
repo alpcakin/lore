@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// One command definition file.
 #[derive(Debug, Deserialize)]
@@ -42,7 +42,7 @@ pub struct Entry {
 }
 
 /// A command string, optionally specialised per shell family.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum CommandBody {
     Shared(String),
@@ -50,16 +50,16 @@ pub enum CommandBody {
 }
 
 /// Optional metadata for a placeholder used in a command.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ParamSpec {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desc: Option<String>,
 
     /// Command whose output supplies selectable values for this placeholder.
     /// Reserved by the schema; the current runtime ignores it and falls back to
     /// a free text prompt.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
 }
 
@@ -73,7 +73,7 @@ pub enum Layer {
 }
 
 /// Shells that share a command dialect.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ShellFamily {
     Posix,

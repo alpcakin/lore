@@ -14,7 +14,7 @@ use anyhow::{Context, Result, bail};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Serialize;
 
-use crate::model::{Entry, Layer, Library};
+use crate::model::{CommandBody, Entry, Layer, Library, ParamSpec};
 
 /// Schema version this build understands.
 const SCHEMA_VERSION: u32 = 1;
@@ -49,13 +49,39 @@ pub fn load(user_library: Option<&Path>) -> Result<Vec<Entry>> {
 }
 
 /// A command on its way into the user's library.
+///
+/// Carries every field an entry can hold, not only the ones a form asks for.
+/// Rewriting an existing entry serialises this whole struct, so anything left
+/// out here would be dropped from the file the moment it was edited.
 #[derive(Debug, Serialize)]
 pub struct NewEntry {
     pub id: String,
-    pub cmd: String,
+    pub cmd: CommandBody,
     pub desc: String,
+
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, ParamSpec>,
+
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub danger: bool,
+}
+
+/// Splits the comma separated tags a user typed into a clean list.
+pub fn parse_tags(text: &str) -> Vec<String> {
+    text.split(',')
+        .map(|tag| tag.trim().to_string())
+        .filter(|tag| !tag.is_empty())
+        .collect()
+}
+
+/// What `upsert` did to the file.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Written {
+    Replaced,
+    Appended,
 }
 
 /// Appends an entry to the user's library, creating the file if needed.
@@ -128,18 +154,54 @@ pub fn remove(path: &Path, id: &str) -> Result<bool> {
         return Ok(false);
     };
 
-    let kept: Vec<&str> = text
-        .lines()
-        .enumerate()
-        .filter(|(number, _)| !block.contains(number))
-        .map(|(_, line)| line)
-        .collect();
-
-    let mut out = kept.join("\n");
-    out.push('\n');
-    fs::write(path, out).with_context(|| format!("failed to write {}", path.display()))?;
-
+    write(path, &splice(&text, block, ""))?;
     Ok(true)
+}
+
+/// Writes an entry into the user's library, replacing one already declared
+/// under the same id.
+///
+/// Nothing outside the one list item is touched, so the comments a user wrote
+/// around their entries survive. A comment sitting inside the entry being
+/// rewritten does not, which is the price of not reserialising the document.
+///
+/// A builtin cannot be changed where it lives, inside the binary. Writing it
+/// here under its own id is enough: the loader shadows by id, so the user's
+/// copy wins.
+pub fn upsert(path: &Path, entry: &NewEntry) -> Result<Written> {
+    let text = fs::read_to_string(path).unwrap_or_default();
+
+    match item_of(&text, &entry.id) {
+        Some(block) => {
+            write(path, &splice(&text, block, &as_list_item(entry)?))?;
+            Ok(Written::Replaced)
+        }
+        None => {
+            append(path, entry)?;
+            Ok(Written::Appended)
+        }
+    }
+}
+
+/// Swaps the lines of one list item for `replacement`, which may be empty.
+fn splice(text: &str, block: Range<usize>, replacement: &str) -> String {
+    let mut out = String::with_capacity(text.len() + replacement.len());
+
+    for (number, line) in text.lines().enumerate() {
+        if number == block.start {
+            out.push_str(replacement);
+        }
+        if !block.contains(&number) {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+
+    out
+}
+
+fn write(path: &Path, text: &str) -> Result<()> {
+    fs::write(path, text).with_context(|| format!("failed to write {}", path.display()))
 }
 
 /// Hides an entry the user cannot delete, such as one compiled into the binary.
@@ -476,10 +538,119 @@ commands:
     fn new_entry(id: &str, cmd: &str) -> NewEntry {
         NewEntry {
             id: id.to_string(),
-            cmd: cmd.to_string(),
+            cmd: CommandBody::Shared(cmd.to_string()),
             desc: "saved from the shell".to_string(),
             tags: vec!["saved".to_string()],
+            params: BTreeMap::new(),
+            danger: false,
         }
+    }
+
+    /// The whole reason an entry is spliced rather than the document
+    /// reserialised: a user's own file is something they wrote, and a save must
+    /// not reflow it.
+    #[test]
+    fn rewriting_an_entry_leaves_the_rest_of_the_file_alone() {
+        let path = scratch("rewrite");
+        fs::write(
+            &path,
+            concat!(
+                "version: 1\n",
+                "# my own commands\n",
+                "commands:\n",
+                "\n",
+                "  # the one I always forget\n",
+                "  - id: user.kics\n",
+                "    cmd: kics scan -p .\n",
+                "    desc: old\n",
+                "\n",
+                "  - id: user.trivy\n",
+                "    cmd: trivy image alpine\n",
+                "    desc: keep me\n",
+            ),
+        )
+        .unwrap();
+
+        let mut entry = new_entry("user.kics", "kics scan -p . --report-formats json");
+        entry.desc = "new".to_string();
+        assert_eq!(upsert(&path, &entry).unwrap(), Written::Replaced);
+
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# my own commands"), "wrote {text:?}");
+        assert!(text.contains("# the one I always forget"), "wrote {text:?}");
+        assert!(text.contains("desc: keep me"), "wrote {text:?}");
+        assert!(text.contains("--report-formats json"), "wrote {text:?}");
+        assert!(!text.contains("desc: old"), "wrote {text:?}");
+        assert_eq!(text.matches("id: user.kics").count(), 1, "wrote {text:?}");
+    }
+
+    /// A form only ever shows the command, the description and the tags. Every
+    /// other field has to survive an edit that never mentioned it.
+    #[test]
+    fn rewriting_keeps_the_fields_no_form_ever_shows() {
+        let path = scratch("rewrite-fields");
+        let entry = NewEntry {
+            id: "sys.ports".to_string(),
+            cmd: CommandBody::PerShell(BTreeMap::from([
+                (ShellFamily::Posix, "ss -tulpn".to_string()),
+                (ShellFamily::PowerShell, "Get-NetTCPConnection".to_string()),
+            ])),
+            desc: "List listening ports".to_string(),
+            tags: vec!["net".to_string()],
+            params: BTreeMap::from([(
+                "port".to_string(),
+                ParamSpec {
+                    desc: Some("Port to look for".to_string()),
+                    from: None,
+                },
+            )]),
+            danger: true,
+        };
+
+        assert_eq!(upsert(&path, &entry).unwrap(), Written::Appended);
+        let reloaded = load(Some(&path)).unwrap();
+        let reloaded = reloaded
+            .iter()
+            .find(|e| e.id == "sys.ports")
+            .expect("the entry should load back");
+
+        assert_eq!(reloaded.cmd_for(ShellFamily::Posix), Some("ss -tulpn"));
+        assert_eq!(
+            reloaded.cmd_for(ShellFamily::PowerShell),
+            Some("Get-NetTCPConnection")
+        );
+        assert!(reloaded.danger);
+        assert_eq!(
+            reloaded.params["port"].desc.as_deref(),
+            Some("Port to look for")
+        );
+    }
+
+    /// A builtin cannot be rewritten where it lives. Writing it under its own id
+    /// is enough because the loader shadows by id.
+    #[test]
+    fn upserting_an_id_the_file_does_not_hold_appends_it() {
+        let path = scratch("upsert-new");
+        fs::write(
+            &path,
+            concat!(
+                "version: 1\n",
+                "commands:\n",
+                "  - id: user.trivy\n",
+                "    cmd: trivy image alpine\n",
+                "    desc: keep me\n",
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            upsert(&path, &new_entry("git.log.graph", "git log --graph")).unwrap(),
+            Written::Appended
+        );
+
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("desc: keep me"), "wrote {text:?}");
+        assert!(text.contains("id: git.log.graph"), "wrote {text:?}");
     }
 
     #[test]
