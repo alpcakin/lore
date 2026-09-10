@@ -1,7 +1,7 @@
 # PSReadLine owns the prompt line. Without it there is nothing to insert into,
 # so the binding is skipped rather than failing at startup.
 if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
-    Set-PSReadLineKeyHandler -Chord 'Ctrl+g' -ScriptBlock {
+    Set-PSReadLineKeyHandler -Chord '{{chord}}' -ScriptBlock {
         # Newest first, in a file rather than in arguments. Windows hands a
         # child one string and lets it split its own arguments, so `cd C:\dir\`
         # escapes the quote meant to close it and swallows the command after it.

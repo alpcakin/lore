@@ -22,4 +22,4 @@ __lore_pick() {
 }
 
 zle -N __lore_pick
-bindkey '^G' __lore_pick
+bindkey '{{chord}}' __lore_pick

@@ -4,6 +4,8 @@
 //! set it up without touching a profile file. Every tool in this category works
 //! the same way.
 
+pub mod chord;
+
 use std::env;
 use std::fs;
 use std::io::{self, BufRead, Write};
@@ -15,6 +17,7 @@ use clap::ValueEnum;
 use directories::BaseDirs;
 
 use crate::model::ShellFamily;
+use crate::shell::chord::Chord;
 
 /// Shells that lore ships a keybinding integration for.
 // Renaming `PowerShell` to satisfy `enum_variant_names` would misrepresent
@@ -28,6 +31,9 @@ pub enum Shell {
     #[value(name = "powershell")]
     PowerShell,
 }
+
+/// Marks the place in every snippet where the chord goes.
+const CHORD: &str = "{{chord}}";
 
 /// Wraps the generated block so setup can find and remove it later.
 const BEGIN: &str = "# >>> lore >>>";
@@ -53,30 +59,43 @@ impl Shell {
     }
 }
 
-/// The integration code for a shell.
+/// The integration code for a shell, with the chord written into it.
 ///
-/// Compiled in and returned verbatim. This runs on every shell start, so it
+/// Compiled in and substituted once. This runs on every shell start, so it
 /// reads no files and does no work beyond printing: a slow one is the most
 /// common reason people uninstall tools of this kind.
-pub fn snippet(shell: Shell) -> &'static str {
-    match shell {
+pub fn snippet(shell: Shell, chord: Chord) -> String {
+    let template = match shell {
         Shell::Bash => include_str!("../../assets/shell/bash.sh"),
         Shell::Zsh => include_str!("../../assets/shell/zsh.zsh"),
         Shell::Fish => include_str!("../../assets/shell/fish.fish"),
         Shell::PowerShell => include_str!("../../assets/shell/powershell.ps1"),
-    }
+    };
+
+    template.replace(CHORD, &chord.render(shell))
 }
 
 /// The single line a profile needs.
 ///
 /// The snippet is fetched from the binary rather than written into the profile
-/// so that an upgraded binary cannot disagree with a stale copy on disk.
-pub fn init_line(shell: Shell) -> &'static str {
+/// so that an upgraded binary cannot disagree with a stale copy on disk. The
+/// chord travels here rather than in a config file because `init` runs on every
+/// shell start and is not allowed to read one.
+pub fn init_line(shell: Shell, chord: Chord) -> String {
+    // A profile that keeps the default reads exactly as it always did.
+    let key = if chord.is_default() {
+        String::new()
+    } else {
+        format!(" --key {chord}")
+    };
+
     match shell {
-        Shell::Bash => r#"eval "$(lore init bash)""#,
-        Shell::Zsh => r#"eval "$(lore init zsh)""#,
-        Shell::Fish => "lore init fish | source",
-        Shell::PowerShell => "Invoke-Expression (& lore init powershell | Out-String)",
+        Shell::Bash => format!(r#"eval "$(lore init bash{key})""#),
+        Shell::Zsh => format!(r#"eval "$(lore init zsh{key})""#),
+        Shell::Fish => format!("lore init fish{key} | source"),
+        Shell::PowerShell => {
+            format!("Invoke-Expression (& lore init powershell{key} | Out-String)")
+        }
     }
 }
 
@@ -191,9 +210,9 @@ fn ask_profile_path(program: &str) -> Option<PathBuf> {
 }
 
 /// Adds the integration to every profile for `shell`.
-pub fn install(shell: Shell, assume_yes: bool) -> Result<()> {
+pub fn install(shell: Shell, chord: Chord, assume_yes: bool) -> Result<()> {
     for profile in profiles(shell)? {
-        install_one(shell, &profile, assume_yes)?;
+        install_one(shell, chord, &profile, assume_yes)?;
     }
 
     if let Some(warning) = execution_policy_warning(shell) {
@@ -204,7 +223,7 @@ pub fn install(shell: Shell, assume_yes: bool) -> Result<()> {
     Ok(())
 }
 
-fn install_one(shell: Shell, profile: &Profile, assume_yes: bool) -> Result<()> {
+fn install_one(shell: Shell, chord: Chord, profile: &Profile, assume_yes: bool) -> Result<()> {
     let existing = fs::read_to_string(&profile.path).unwrap_or_default();
     if existing.contains(BEGIN) {
         println!(
@@ -215,7 +234,7 @@ fn install_one(shell: Shell, profile: &Profile, assume_yes: bool) -> Result<()> 
         return Ok(());
     }
 
-    let block = block(shell);
+    let block = block(shell, chord);
     println!("{}: {}", profile.label, profile.path.display());
     println!("The following will be appended:");
     println!("{block}");
@@ -241,7 +260,11 @@ fn install_one(shell: Shell, profile: &Profile, assume_yes: bool) -> Result<()> 
     file.write_all(block.as_bytes())
         .with_context(|| format!("failed to write {}", profile.path.display()))?;
 
-    println!("{}: done, open a new shell and press ctrl+g", profile.label);
+    println!(
+        "{}: done, open a new shell and press {}",
+        profile.label,
+        chord.spoken()
+    );
     Ok(())
 }
 
@@ -270,8 +293,8 @@ pub fn uninstall(shell: Shell) -> Result<()> {
     Ok(())
 }
 
-fn block(shell: Shell) -> String {
-    format!("\n{BEGIN}\n{}\n{END}\n", init_line(shell))
+fn block(shell: Shell, chord: Chord) -> String {
+    format!("\n{BEGIN}\n{}\n{END}\n", init_line(shell, chord))
 }
 
 /// Drops the marked block, leaving everything the user wrote untouched.
@@ -350,6 +373,10 @@ mod tests {
 
     const ALL: [Shell; 4] = [Shell::Bash, Shell::Zsh, Shell::Fish, Shell::PowerShell];
 
+    fn snippet(shell: Shell) -> String {
+        super::snippet(shell, Chord::default())
+    }
+
     #[test]
     fn every_shell_binds_the_chord() {
         for shell in ALL {
@@ -360,6 +387,34 @@ mod tests {
                 "{shell:?} never calls the picker"
             );
         }
+    }
+
+    /// A snippet still carrying its placeholder would be handed to the shell
+    /// verbatim and bind nothing at all.
+    #[test]
+    fn no_snippet_reaches_the_shell_with_its_placeholder_intact() {
+        for shell in ALL {
+            for key in ["ctrl-g", "alt-r"] {
+                let chord: Chord = key.parse().expect("should parse");
+                let snippet = super::snippet(shell, chord);
+
+                assert!(!snippet.contains(CHORD), "{shell:?} kept the placeholder");
+                assert!(
+                    snippet.contains(&chord.render(shell)),
+                    "{shell:?} never binds {key}"
+                );
+            }
+        }
+    }
+
+    /// fish binds twice, once per mode, and a substitution that only reached
+    /// the first would leave vi mode dead.
+    #[test]
+    fn fish_binds_the_chord_in_both_of_its_modes() {
+        let chord: Chord = "alt-r".parse().expect("should parse");
+        let snippet = super::snippet(Shell::Fish, chord);
+
+        assert_eq!(snippet.matches(&chord.render(Shell::Fish)).count(), 2);
     }
 
     /// A carriage return inside these snippets breaks them at source, which is
@@ -427,8 +482,22 @@ mod tests {
     #[test]
     fn every_shell_knows_how_to_load_its_snippet() {
         for shell in ALL {
-            assert!(init_line(shell).contains("lore init"));
-            assert!(init_line(shell).contains(shell.label()));
+            let line = init_line(shell, Chord::default());
+            assert!(line.contains("lore init"));
+            assert!(line.contains(shell.label()));
+        }
+    }
+
+    /// The chord has to survive into the profile, and a profile that kept the
+    /// default has to keep the line it was written with.
+    #[test]
+    fn only_a_changed_chord_reaches_the_init_line() {
+        for shell in ALL {
+            assert!(!init_line(shell, Chord::default()).contains("--key"));
+            assert!(
+                init_line(shell, "alt-r".parse().expect("should parse")).contains("--key alt-r"),
+                "{shell:?} loses the chord"
+            );
         }
     }
 
@@ -436,7 +505,7 @@ mod tests {
     fn stripping_removes_only_the_marked_block() {
         let profile = format!(
             "export EDITOR=vim\n\n{BEGIN}\n{}\n{END}\nalias ll='ls -la'\n",
-            init_line(Shell::Bash)
+            init_line(Shell::Bash, Chord::default())
         );
 
         assert_eq!(strip(&profile), "export EDITOR=vim\n\nalias ll='ls -la'\n");
@@ -445,7 +514,7 @@ mod tests {
     #[test]
     fn installing_then_stripping_returns_the_original() {
         let original = "export EDITOR=vim\nalias ll='ls -la'\n";
-        let installed = format!("{original}{}", block(Shell::Zsh));
+        let installed = format!("{original}{}", block(Shell::Zsh, Chord::default()));
 
         assert!(installed.contains(BEGIN));
         assert_eq!(strip(&installed).trim_end(), original.trim_end());

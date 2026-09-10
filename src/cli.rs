@@ -8,6 +8,7 @@ use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 
 use crate::model::{Entry, ShellFamily};
+use crate::shell::chord::{self, Chord};
 use crate::shell::{self, Shell};
 use crate::store::definitions::{self, NewEntry};
 use crate::store::stats::{self, Stats};
@@ -25,13 +26,23 @@ pub struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Print the shell integration snippet for the given shell.
-    Init { shell: Shell },
+    Init {
+        shell: Shell,
+
+        /// Key that opens the picker, written as ctrl-g or alt-r.
+        #[arg(long, value_name = "CHORD", default_value = chord::DEFAULT)]
+        key: Chord,
+    },
 
     /// Install the shell integration into the active shell profile.
     Setup {
         /// Shell to set up. Detected from the environment when omitted.
         #[arg(long)]
         shell: Option<Shell>,
+
+        /// Key that opens the picker, written as ctrl-g or alt-r.
+        #[arg(long, value_name = "CHORD", default_value = chord::DEFAULT)]
+        key: Chord,
 
         /// Do not ask before writing to a profile.
         #[arg(long, short = 'y')]
@@ -85,11 +96,11 @@ enum Command {
 impl Cli {
     pub fn run(self) -> Result<()> {
         match self.command {
-            Command::Init { shell } => {
-                print!("{}", shell::snippet(shell));
+            Command::Init { shell, key } => {
+                print!("{}", shell::snippet(shell, key));
                 Ok(())
             }
-            Command::Setup { shell, yes } => shell::install(resolve(shell)?, yes),
+            Command::Setup { shell, key, yes } => shell::install(resolve(shell)?, key, yes),
             Command::Uninstall { shell } => shell::uninstall(resolve(shell)?),
             Command::Pick { shell, history } => pick(family(shell), history.as_deref()),
             Command::Save {

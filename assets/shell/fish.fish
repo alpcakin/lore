@@ -16,5 +16,5 @@ function __lore_pick
     commandline -f repaint
 end
 
-bind \cg __lore_pick
-bind -M insert \cg __lore_pick
+bind {{chord}} __lore_pick
+bind -M insert {{chord}} __lore_pick

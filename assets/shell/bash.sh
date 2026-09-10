@@ -23,5 +23,5 @@ __lore_pick() {
 # `bind` only exists in an interactive shell, and `bind -x` only takes effect in
 # emacs mode.
 case $- in
-    *i*) bind -x '"\C-g": __lore_pick' ;;
+    *i*) bind -x '"{{chord}}": __lore_pick' ;;
 esac
