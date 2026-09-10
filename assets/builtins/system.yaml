@@ -1,0 +1,195 @@
+version: 1
+
+commands:
+
+  - id: sys.ports.listening
+    cmd:
+      posix: sudo ss -tulpn
+      powershell: 'Get-NetTCPConnection -State Listen | Select-Object LocalAddress, LocalPort, OwningProcess'
+    desc: See every port something is listening on, and what is listening
+    tags: [system, ports, network, listening, sockets]
+
+  - id: sys.port.owner
+    cmd:
+      posix: sudo lsof -nP -iTCP:<port> -sTCP:LISTEN
+      powershell: 'Get-Process -Id (Get-NetTCPConnection -LocalPort <port>).OwningProcess'
+    desc: Find out what is holding the port you wanted
+    tags: [system, port, process, conflict, address-in-use]
+    params:
+      port:
+        desc: Port number
+
+  - id: sys.port.free
+    cmd:
+      posix: sudo kill -9 $(sudo lsof -t -iTCP:<port> -sTCP:LISTEN)
+      powershell: 'Stop-Process -Id (Get-NetTCPConnection -LocalPort <port>).OwningProcess -Force'
+    desc: Kill whatever is holding a port
+    tags: [system, port, kill, process, conflict]
+    danger: true
+    params:
+      port:
+        desc: Port to free
+
+  - id: sys.process.by-name
+    cmd:
+      posix: pgrep -af <name>
+      powershell: 'Get-Process <name> | Format-Table Id, ProcessName, Path -AutoSize'
+    desc: Find a running process and the arguments it was started with
+    tags: [system, process, search, ps, pid]
+    params:
+      name:
+        desc: Part of the process name
+
+  - id: sys.process.top-memory
+    cmd:
+      posix: ps aux --sort=-%mem | head -n <count:15>
+      powershell: 'Get-Process | Sort-Object WS -Descending | Select-Object -First <count:15> Id, ProcessName, WS'
+    desc: Find what is eating the memory on this machine
+    tags: [system, process, memory, top, performance]
+    params:
+      count:
+        desc: How many processes to show
+
+  - id: sys.disk.free
+    cmd:
+      posix: df -h
+      powershell: 'Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free'
+    desc: Check how much room is left on each drive
+    tags: [system, disk, free, space, storage]
+
+  - id: sys.disk.biggest-directories
+    cmd:
+      posix: du -h --max-depth=1 <path:.> | sort -h | tail -n 20
+      powershell: 'Get-ChildItem <path:.> -Directory | ForEach-Object { [PSCustomObject]@{ Name = $_.Name; GB = [math]::Round((Get-ChildItem $_ -Recurse -File | Measure-Object Length -Sum).Sum / 1GB, 2) } } | Sort-Object GB -Descending'
+    desc: Find where the disk actually went
+    tags: [system, disk, size, directories, cleanup]
+    params:
+      path:
+        desc: Directory to break down
+
+  - id: sys.find.by-name
+    cmd:
+      posix: find <path:.> -type f -name "<pattern>"
+      powershell: 'Get-ChildItem <path:.> -Recurse -File -Filter "<pattern>"'
+    desc: Find a file when you only remember part of its name
+    tags: [system, find, search, files, name]
+    params:
+      path:
+        desc: Where to start looking
+      pattern:
+        desc: Name pattern, wildcards allowed
+
+  - id: sys.find.large-files
+    cmd:
+      posix: find <path:.> -type f -size +<size:100M> -exec ls -lh {} +
+      powershell: 'Get-ChildItem <path:.> -Recurse -File | Where-Object Length -gt <bytes:100MB> | Sort-Object Length -Descending'
+    desc: Track down the files filling a directory up
+    tags: [system, find, large, size, disk, cleanup]
+    params:
+      path:
+        desc: Where to start looking
+      size:
+        desc: Minimum size, such as 100M or 1G
+      bytes:
+        desc: Minimum size, such as 100MB or 1GB
+
+  - id: sys.find.recently-changed
+    cmd:
+      posix: find <path:.> -type f -mtime -<days:1> -not -path "*/.git/*"
+      powershell: 'Get-ChildItem <path:.> -Recurse -File | Where-Object LastWriteTime -gt (Get-Date).AddDays(-<days:1>)'
+    desc: Work out what changed on disk while you were away
+    tags: [system, find, modified, recent, files]
+    params:
+      path:
+        desc: Where to start looking
+      days:
+        desc: How far back to go
+
+  - id: sys.tail.follow
+    cmd:
+      posix: tail -f -n <lines:100> <path>
+      powershell: 'Get-Content <path> -Wait -Tail <lines:100>'
+    desc: Watch a log file as it is written
+    tags: [system, tail, follow, log, watch]
+    params:
+      path:
+        desc: File to follow
+      lines:
+        desc: How much history to show first
+
+  - id: sys.watch.repeat
+    cmd:
+      posix: watch -n <seconds:2> <command>
+      powershell: 'while ($true) { Clear-Host; <command>; Start-Sleep -Seconds <seconds:2> }'
+    desc: Run something on a loop until the number you are waiting for changes
+    tags: [system, watch, repeat, poll, monitor]
+    params:
+      seconds:
+        desc: Delay between runs
+      command:
+        desc: Command to repeat
+
+  - id: sys.env.sorted
+    cmd:
+      posix: env | sort
+      powershell: 'Get-ChildItem Env: | Sort-Object Name'
+    desc: Read the environment this shell is actually running with
+    tags: [system, environment, variables, debug]
+
+  - id: sys.path.readable
+    cmd:
+      posix: echo "$PATH" | tr ':' '\n'
+      powershell: '$env:PATH -split ";"'
+    desc: Read PATH one entry per line instead of as one wall of text
+    tags: [system, path, environment, debug]
+
+  - id: sys.which.all
+    cmd:
+      posix: type -a <command>
+      powershell: 'Get-Command <command> -All'
+    desc: Find out which copy of a tool you are getting, and what else is shadowed
+    tags: [system, which, path, shadow, debug]
+    params:
+      command:
+        desc: Command to resolve
+
+  - id: sys.hash.file
+    cmd:
+      posix: shasum -a 256 <path>
+      powershell: 'Get-FileHash <path> -Algorithm SHA256'
+    desc: Check a download against the checksum it was published with
+    tags: [system, hash, sha256, checksum, verify]
+    params:
+      path:
+        desc: File to hash
+
+  - id: sys.service.status
+    cmd:
+      posix: systemctl status <service>
+      powershell: 'Get-Service <service> | Format-List Name, Status, StartType'
+    desc: Find out whether a service is running and why it stopped
+    tags: [system, service, systemd, status, daemon]
+    params:
+      service:
+        desc: Service name
+
+  - id: sys.service.logs
+    cmd:
+      posix: journalctl -u <service> -n <lines:200> --no-pager
+    desc: Read what a service logged before it fell over
+    tags: [system, journalctl, logs, systemd, service]
+    params:
+      service:
+        desc: Service name
+      lines:
+        desc: How many lines to show
+
+  - id: sys.permissions.normalise
+    cmd:
+      posix: 'find <path> -type d -exec chmod 755 {} + -o -type f -exec chmod 644 {} +'
+    desc: Put a tree back to the usual directory and file permissions
+    tags: [system, chmod, permissions, files, fix]
+    danger: true
+    params:
+      path:
+        desc: Directory to walk

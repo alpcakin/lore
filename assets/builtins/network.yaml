@@ -1,0 +1,113 @@
+version: 1
+
+commands:
+
+  - id: net.http.timing
+    cmd:
+      posix: 'curl -w "dns %{time_namelookup}s connect %{time_connect}s tls %{time_appconnect}s total %{time_total}s\n" -o /dev/null -s <url>'
+      powershell: 'curl.exe -w "dns %{time_namelookup}s connect %{time_connect}s tls %{time_appconnect}s total %{time_total}s`n" -o NUL -s <url>'
+    desc: Find out which part of a slow request is actually slow
+    tags: [network, curl, http, latency, performance]
+    params:
+      url:
+        desc: Address to measure
+
+  - id: net.http.headers
+    cmd:
+      posix: curl -sSI -L <url>
+      powershell: curl.exe -sSI -L <url>
+    desc: Read the response headers and follow every redirect on the way
+    tags: [network, curl, http, headers, redirect]
+    params:
+      url:
+        desc: Address to fetch
+
+  - id: net.http.post-json
+    cmd:
+      posix: 'curl -sS -X POST -H "Content-Type: application/json" -d ''<body>'' <url>'
+      powershell: 'curl.exe -sS -X POST -H "Content-Type: application/json" -d ''<body>'' <url>'
+    desc: Send a JSON body to an endpoint without opening a client
+    tags: [network, curl, http, post, json, api]
+    params:
+      url:
+        desc: Endpoint to post to
+      body:
+        desc: JSON document to send
+
+  - id: net.dns.resolve
+    cmd:
+      posix: dig +short <host>
+      powershell: 'Resolve-DnsName <host> | Select-Object Name, Type, IPAddress'
+    desc: Check what a name actually resolves to right now
+    tags: [network, dns, dig, resolve, host]
+    params:
+      host:
+        desc: Name to look up
+
+  - id: net.dns.trace
+    cmd:
+      posix: dig +trace <host>
+    desc: Follow a name from the root servers down, when caching is suspect
+    tags: [network, dns, dig, trace, propagation]
+    params:
+      host:
+        desc: Name to look up
+
+  - id: net.tls.certificate
+    cmd:
+      posix: 'echo | openssl s_client -connect <host>:<port:443> -servername <host> 2>/dev/null | openssl x509 -noout -dates -subject -issuer'
+    desc: Find out when a certificate expires and who issued it
+    tags: [network, tls, ssl, certificate, expiry, openssl]
+    params:
+      host:
+        desc: Host to connect to
+      port:
+        desc: Port the service listens on
+
+  - id: net.reach.port
+    cmd:
+      posix: nc -vz -w <timeout:5> <host> <port>
+      powershell: 'Test-NetConnection <host> -Port <port>'
+    desc: Check whether a port is reachable before blaming the application
+    tags: [network, port, connectivity, firewall, test]
+    params:
+      host:
+        desc: Host to reach
+      port:
+        desc: Port to try
+      timeout:
+        desc: Seconds to wait
+
+  - id: net.route.trace
+    cmd:
+      posix: traceroute -n <host>
+      powershell: 'Test-NetConnection <host> -TraceRoute'
+    desc: See where packets stop when a host is unreachable
+    tags: [network, traceroute, routing, latency]
+    params:
+      host:
+        desc: Host to trace
+
+  - id: net.address.public
+    cmd:
+      posix: curl -sS https://ifconfig.me
+      powershell: 'Invoke-RestMethod https://ifconfig.me'
+    desc: Find the address this machine appears to come from
+    tags: [network, ip, public, address, nat]
+
+  - id: net.serve.here
+    cmd:
+      posix: python3 -m http.server <port:8000>
+      powershell: python -m http.server <port:8000>
+    desc: Put the current directory on a port for one quick transfer
+    tags: [network, http, server, share, python]
+    params:
+      port:
+        desc: Port to listen on
+
+  - id: net.interfaces
+    cmd:
+      posix: ip -brief address
+      powershell: 'Get-NetIPAddress | Select-Object InterfaceAlias, IPAddress, PrefixLength'
+    desc: Read this machine's addresses without pages of output
+    tags: [network, interfaces, address, ip]

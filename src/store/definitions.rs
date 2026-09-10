@@ -22,12 +22,34 @@ const SCHEMA_VERSION: u32 = 1;
 /// Top level key holding the ids a layer hides.
 const DISABLED: &str = "disabled:";
 
+macro_rules! builtin {
+    ($name:literal) => {
+        (
+            concat!("builtin:", $name, ".yaml"),
+            include_str!(concat!("../../assets/builtins/", $name, ".yaml")),
+        )
+    };
+}
+
 /// Libraries compiled into the binary, so a fresh install opens onto a full
 /// picker without a network round trip.
-const BUILTINS: &[(&str, &str)] = &[(
-    "builtin:sample.yaml",
-    include_str!("../../assets/builtins/sample.yaml"),
-)];
+///
+/// One file per namespace, listed by hand rather than gathered by a build
+/// script: a list read as easily as it is written is worth more here than one
+/// that maintains itself.
+const BUILTINS: &[(&str, &str)] = &[
+    builtin!("archive"),
+    builtin!("docker"),
+    builtin!("git"),
+    builtin!("kubernetes"),
+    builtin!("network"),
+    builtin!("node"),
+    builtin!("rust"),
+    builtin!("security"),
+    builtin!("ssh"),
+    builtin!("system"),
+    builtin!("text"),
+];
 
 /// Loads the builtin library, overlaying the user's own file when it exists.
 pub fn load(user_library: Option<&Path>) -> Result<Vec<Entry>> {
@@ -390,8 +412,87 @@ mod tests {
     #[test]
     fn builtin_library_is_valid() {
         let entries = load(None).expect("builtin library must parse");
-        assert_eq!(entries.len(), 20);
+        assert!(
+            entries.len() > 100,
+            "only {} entries shipped",
+            entries.len()
+        );
         assert!(entries.iter().all(|e| e.layer == Layer::Builtin));
+    }
+
+    /// Ids are the only handle a user, an override and the statistics all share,
+    /// so a duplicate across two namespace files would silently shadow an entry.
+    #[test]
+    fn builtin_ids_are_unique_and_namespaced() {
+        let entries = load(None).unwrap();
+        let mut seen = BTreeSet::new();
+
+        for entry in &entries {
+            assert!(seen.insert(entry.id.clone()), "{} appears twice", entry.id);
+
+            let (namespace, rest) = entry.id.split_once('.').unwrap_or((&entry.id, ""));
+            assert!(
+                !namespace.is_empty() && !rest.is_empty(),
+                "{} is not namespaced",
+                entry.id
+            );
+            assert!(
+                entry
+                    .id
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-'),
+                "{} is not a plain id",
+                entry.id
+            );
+        }
+    }
+
+    /// A placeholder with no description is a prompt with nothing above it. The
+    /// user is being asked for a value and told nothing about what it is.
+    #[test]
+    fn every_builtin_placeholder_is_documented() {
+        let entries = load(None).unwrap();
+
+        for entry in &entries {
+            for family in [ShellFamily::Posix, ShellFamily::PowerShell] {
+                let Some(cmd) = entry.cmd_for(family) else {
+                    continue;
+                };
+
+                for name in crate::params::names(cmd) {
+                    let documented = entry
+                        .params
+                        .get(&name)
+                        .is_some_and(|spec| spec.desc.is_some());
+                    assert!(documented, "{} does not document <{name}>", entry.id);
+                }
+            }
+        }
+    }
+
+    /// A description is the only thing most searches match against, and a tag
+    /// list is what makes an entry findable under a word it does not contain.
+    #[test]
+    fn every_builtin_is_findable() {
+        let entries = load(None).unwrap();
+
+        for entry in &entries {
+            assert!(
+                !entry.desc.trim().is_empty(),
+                "{} has no description",
+                entry.id
+            );
+            assert!(entry.tags.len() >= 2, "{} carries too few tags", entry.id);
+        }
+    }
+
+    /// The interface is ASCII only: a legacy Windows console runs on the system
+    /// code page, where anything else arrives as mojibake.
+    #[test]
+    fn the_builtin_library_is_ascii() {
+        for (origin, source) in BUILTINS {
+            assert!(source.is_ascii(), "{origin} is not ascii");
+        }
     }
 
     #[test]
@@ -414,12 +515,7 @@ mod tests {
             .find(|e| e.id == "sys.ports.listening")
             .unwrap();
 
-        assert!(
-            ports
-                .cmd_for(ShellFamily::Posix)
-                .unwrap()
-                .starts_with("ss ")
-        );
+        assert!(ports.cmd_for(ShellFamily::Posix).unwrap().contains("ss "));
         assert!(
             ports
                 .cmd_for(ShellFamily::PowerShell)
@@ -757,11 +853,12 @@ commands:
     #[test]
     fn disabling_hides_a_builtin() {
         let path = scratch("disable");
-        disable(&path, "docker.prune.all").unwrap();
+        let before = load(None).unwrap().len();
+        disable(&path, "docker.prune.everything").unwrap();
 
         let entries = load(Some(&path)).unwrap();
-        assert!(!ids(&entries).contains(&"docker.prune.all"));
-        assert_eq!(entries.len(), 19);
+        assert!(!ids(&entries).contains(&"docker.prune.everything"));
+        assert_eq!(entries.len(), before - 1);
 
         let _ = fs::remove_file(&path);
     }
@@ -769,14 +866,15 @@ commands:
     #[test]
     fn disabling_twice_extends_the_existing_list() {
         let path = scratch("disable-twice");
-        disable(&path, "docker.prune.all").unwrap();
+        let before = load(None).unwrap().len();
+        disable(&path, "docker.prune.everything").unwrap();
         disable(&path, "git.log.graph").unwrap();
 
         let text = fs::read_to_string(&path).unwrap();
         assert_eq!(text.matches("disabled:").count(), 1, "wrote {text:?}");
 
         let entries = load(Some(&path)).unwrap();
-        assert_eq!(entries.len(), 18);
+        assert_eq!(entries.len(), before - 2);
 
         let _ = fs::remove_file(&path);
     }
@@ -785,7 +883,7 @@ commands:
     fn disabling_leaves_saved_commands_in_place() {
         let path = scratch("disable-keeps");
         append(&path, &new_entry("user.mine", "docker ps")).unwrap();
-        disable(&path, "docker.prune.all").unwrap();
+        disable(&path, "docker.prune.everything").unwrap();
 
         let entries = load(Some(&path)).unwrap();
         let ids = ids(&entries);

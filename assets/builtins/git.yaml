@@ -1,0 +1,214 @@
+version: 1
+
+commands:
+
+  - id: git.log.graph
+    cmd: git log --oneline --graph --decorate --all
+    desc: See how the branches relate to each other
+    tags: [git, log, history, graph, branches]
+
+  - id: git.log.by-author
+    cmd: 'git log --author=<author> --oneline --since=<since:1 week ago>'
+    desc: Find out what someone has been working on
+    tags: [git, log, author, standup]
+    params:
+      author:
+        desc: Name or email, matched as a substring
+      since:
+        desc: Anything git understands, such as 2 days ago or 2026-01-01
+
+  - id: git.log.file-history
+    cmd: git log --follow -p -- <path>
+    desc: Read how one file reached its current state, across renames
+    tags: [git, log, file, history, rename]
+    params:
+      path:
+        desc: File to follow
+
+  - id: git.log.pickaxe
+    cmd: git log -S"<text>" --oneline
+    desc: Find the commit that introduced or deleted a piece of code
+    tags: [git, search, pickaxe, log, blame]
+    params:
+      text:
+        desc: Literal string to look for in the diffs
+
+  - id: git.blame.ignore-noise
+    cmd: git blame -w -M -C <path>
+    desc: Blame a file without reformatting and code moves getting in the way
+    tags: [git, blame, history, whitespace]
+    params:
+      path:
+        desc: File to blame
+
+  - id: git.show.file-at-revision
+    cmd: 'git show <revision>:<path>'
+    desc: Read a file as it was at some point in the past
+    tags: [git, show, revision, file]
+    params:
+      revision:
+        desc: Commit, tag or branch
+      path:
+        desc: Path from the root of the repository
+
+  - id: git.undo.last-commit
+    cmd: git reset --soft HEAD~1
+    desc: Undo the last commit and keep every change staged
+    tags: [git, undo, reset, commit]
+
+  - id: git.undo.discard-file
+    cmd: git restore --source=HEAD --staged --worktree -- <path>
+    desc: Throw away every change to one file, staged or not
+    tags: [git, restore, discard, undo]
+    danger: true
+    params:
+      path:
+        desc: File to reset to its committed state
+
+  - id: git.commit.amend-quietly
+    cmd: git commit --amend --no-edit
+    desc: Fold what is staged into the last commit without touching its message
+    tags: [git, commit, amend, fixup]
+
+  - id: git.commit.fixup
+    cmd: git commit --fixup <commit>
+    desc: Record a fix that an interactive rebase will squash into its target
+    tags: [git, commit, fixup, rebase, squash]
+    params:
+      commit:
+        desc: Commit the fix belongs to
+
+  - id: git.diff.against-base
+    cmd: git diff --stat <base:main>...HEAD
+    desc: See which files this branch changed, and no more than that
+    tags: [git, diff, review, branch]
+    params:
+      base:
+        desc: Branch this one was cut from
+
+  - id: git.diff.staged
+    cmd: git diff --cached
+    desc: Read what is about to be committed
+    tags: [git, diff, staged, review]
+
+  - id: git.diff.word-level
+    cmd: git diff --word-diff=color <path>
+    desc: Read a prose or config diff without whole lines going red
+    tags: [git, diff, words, prose]
+    params:
+      path:
+        desc: File or directory to compare
+
+  - id: git.branch.merged-into
+    cmd: git branch --merged <base:main>
+    desc: List the branches that are safe to delete
+    tags: [git, branch, merged, cleanup]
+    params:
+      base:
+        desc: Branch to test against
+
+  - id: git.branch.sorted-by-date
+    cmd: git branch --sort=-committerdate --format='%(committerdate:short) %(refname:short)'
+    desc: Find the branch you were on last week
+    tags: [git, branch, recent, date]
+
+  - id: git.remote.prune
+    cmd: git fetch --prune
+    desc: Drop the remote branches that no longer exist
+    tags: [git, fetch, prune, remote, cleanup]
+
+  - id: git.stash.with-untracked
+    cmd: git stash push -u -m <message>
+    desc: Put everything aside, including files git has never seen
+    tags: [git, stash, untracked, wip]
+    params:
+      message:
+        desc: What you were in the middle of
+
+  - id: git.stash.inspect
+    cmd: git stash show -p stash@{<index:0>}
+    desc: Read what is inside a stash before applying it
+    tags: [git, stash, show, diff]
+    params:
+      index:
+        desc: Position in the stash list, newest is 0
+
+  - id: git.clean.dry-run
+    cmd: git clean -nfdx
+    desc: See which untracked and ignored files a clean would delete
+    tags: [git, clean, untracked, preview]
+
+  - id: git.clean.force
+    cmd: git clean -fdx
+    desc: Delete every untracked and ignored file, build output included
+    tags: [git, clean, untracked, reset]
+    danger: true
+
+  - id: git.rebase.interactive
+    cmd: git rebase -i <base:main>
+    desc: Reorder, squash or reword the commits on this branch
+    tags: [git, rebase, squash, history]
+    params:
+      base:
+        desc: Commit to rebase onto
+
+  - id: git.cherry-pick.range
+    cmd: git cherry-pick <from>..<to>
+    desc: Move a run of commits onto the current branch
+    tags: [git, cherry-pick, range, backport]
+    params:
+      from:
+        desc: Commit before the first one to take
+      to:
+        desc: Last commit to take
+
+  - id: git.bisect.start
+    cmd: git bisect start <bad:HEAD> <good>
+    desc: Find the commit that broke something by halving the history
+    tags: [git, bisect, debug, regression]
+    params:
+      bad:
+        desc: Commit known to be broken
+      good:
+        desc: Commit known to work
+
+  - id: git.worktree.add
+    cmd: git worktree add ../<directory> <branch>
+    desc: Check out a second branch beside this one instead of stashing
+    tags: [git, worktree, branch, parallel]
+    params:
+      directory:
+        desc: Folder to create next to this repository
+      branch:
+        desc: Branch to check out there
+
+  - id: git.reflog.recover
+    cmd: git reflog --date=iso
+    desc: Find a commit you thought you had lost
+    tags: [git, reflog, recover, lost, undo]
+
+  - id: git.push.force-with-lease
+    cmd: git push --force-with-lease
+    desc: Overwrite the remote branch, but not someone else's work
+    tags: [git, push, force, rebase]
+    danger: true
+
+  - id: git.tag.annotated
+    cmd: git tag -a <tag> -m <message>
+    desc: Cut a release tag that carries a message and an author
+    tags: [git, tag, release, annotate]
+    params:
+      tag:
+        desc: Tag name, such as v1.2.0
+      message:
+        desc: What this release is
+
+  - id: git.submodule.sync
+    cmd: git submodule update --init --recursive
+    desc: Bring the submodules to the commits this repository expects
+    tags: [git, submodule, init, update]
+
+  - id: git.config.where-from
+    cmd: git config --list --show-origin
+    desc: Find out which file is setting a git option
+    tags: [git, config, debug, origin]

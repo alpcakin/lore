@@ -1,0 +1,138 @@
+version: 1
+
+commands:
+
+  - id: text.search.recursive
+    cmd:
+      posix: grep -rIn --exclude-dir=.git "<pattern>" <path:.>
+      powershell: 'Select-String -Pattern "<pattern>" -Path <path:.> -Recurse | Select-Object Path, LineNumber, Line'
+    desc: Find where a string appears across a whole tree
+    tags: [text, grep, search, recursive, code]
+    params:
+      pattern:
+        desc: Text or regular expression to look for
+      path:
+        desc: Where to start looking
+
+  - id: text.search.with-context
+    cmd:
+      posix: grep -rIn -C <lines:3> "<pattern>" <path:.>
+    desc: See the lines around a match instead of the match alone
+    tags: [text, grep, context, search]
+    params:
+      pattern:
+        desc: Text or regular expression to look for
+      lines:
+        desc: How many lines to show on each side
+      path:
+        desc: Where to start looking
+
+  - id: text.search.files-only
+    cmd:
+      posix: grep -rIl "<pattern>" <path:.>
+    desc: List which files mention something, without the matching lines
+    tags: [text, grep, files, list, search]
+    params:
+      pattern:
+        desc: Text or regular expression to look for
+      path:
+        desc: Where to start looking
+
+  - id: text.replace.in-tree
+    cmd:
+      posix: 'grep -rIl "<from>" <path:.> | xargs sed -i "s/<from>/<to>/g"'
+    desc: Rename something everywhere it appears
+    tags: [text, sed, replace, rename, refactor]
+    danger: true
+    params:
+      from:
+        desc: Text to replace
+      to:
+        desc: Text to put in its place
+      path:
+        desc: Where to start looking
+
+  - id: text.json.query
+    cmd: 'jq "<filter>" <path>'
+    desc: Pull one field out of a JSON document
+    tags: [text, jq, json, query, filter]
+    params:
+      filter:
+        desc: jq expression, such as .items[].name
+      path:
+        desc: JSON file to read
+
+  - id: text.json.pretty
+    cmd:
+      posix: jq . <path>
+      powershell: 'Get-Content <path> -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 20'
+    desc: Make a minified JSON file readable
+    tags: [text, json, format, pretty, indent]
+    params:
+      path:
+        desc: JSON file to format
+
+  - id: text.yaml.check
+    cmd:
+      posix: 'python3 -c "import sys,yaml;yaml.safe_load(open(sys.argv[1]))" <path>'
+    desc: Find out whether a YAML file parses before something else refuses it
+    tags: [text, yaml, validate, parse, lint]
+    params:
+      path:
+        desc: YAML file to check
+
+  - id: text.diff.two-files
+    cmd:
+      posix: diff -u <left> <right>
+      powershell: 'Compare-Object (Get-Content <left>) (Get-Content <right>)'
+    desc: Compare two files that are not in a repository
+    tags: [text, diff, compare, files]
+    params:
+      left:
+        desc: File to compare from
+      right:
+        desc: File to compare against
+
+  - id: text.count.occurrences
+    cmd:
+      posix: 'grep -rIo "<pattern>" <path:.> | sort | uniq -c | sort -rn'
+    desc: Count how often something appears, most common first
+    tags: [text, count, frequency, uniq, sort]
+    params:
+      pattern:
+        desc: Text or regular expression to count
+      path:
+        desc: Where to start looking
+
+  - id: text.column.extract
+    cmd:
+      posix: "awk '{print $<column:1>}' <path>"
+    desc: Pull one column out of whitespace separated output
+    tags: [text, awk, column, field, extract]
+    params:
+      column:
+        desc: Which field to print, starting at 1
+      path:
+        desc: File to read
+
+  - id: text.line.range
+    cmd:
+      posix: "sed -n '<from>,<to>p' <path>"
+    desc: Read the lines a stack trace pointed at, without opening an editor
+    tags: [text, sed, lines, range, extract]
+    params:
+      from:
+        desc: First line to print
+      to:
+        desc: Last line to print
+      path:
+        desc: File to read
+
+  - id: text.encoding.strip-bom
+    cmd:
+      posix: "sed -i '1s/^\\xEF\\xBB\\xBF//' <path>"
+    desc: Remove the byte order mark that makes a file fail to parse
+    tags: [text, encoding, bom, utf8, fix]
+    params:
+      path:
+        desc: File to clean

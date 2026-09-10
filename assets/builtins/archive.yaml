@@ -1,0 +1,88 @@
+version: 1
+
+commands:
+
+  - id: archive.tar.create
+    cmd: tar czf <name>.tar.gz <path>
+    desc: Pack a directory into one compressed file
+    tags: [archive, tar, gzip, compress, pack]
+    params:
+      name:
+        desc: Archive name, without the extension
+      path:
+        desc: Directory or file to pack
+
+  - id: archive.tar.list
+    cmd: tar tzf <path>
+    desc: Read what is inside an archive before unpacking it over your files
+    tags: [archive, tar, list, inspect, preview]
+    params:
+      path:
+        desc: Archive to inspect
+
+  - id: archive.tar.extract-into
+    cmd: tar xzf <path> -C <directory>
+    desc: Unpack an archive somewhere other than the current directory
+    tags: [archive, tar, extract, unpack, directory]
+    params:
+      path:
+        desc: Archive to unpack
+      directory:
+        desc: Existing directory to unpack into
+
+  - id: archive.tar.strip-leading
+    cmd: tar xzf <path> --strip-components=<levels:1>
+    desc: Unpack an archive that wraps everything in one extra folder
+    tags: [archive, tar, extract, strip, flatten]
+    params:
+      path:
+        desc: Archive to unpack
+      levels:
+        desc: How many leading path segments to drop
+
+  - id: archive.zip.create
+    cmd:
+      posix: zip -r <name>.zip <path>
+      powershell: 'Compress-Archive -Path <path> -DestinationPath <name>.zip'
+    desc: Produce a zip for someone who cannot open a tarball
+    tags: [archive, zip, compress, pack, windows]
+    params:
+      name:
+        desc: Archive name, without the extension
+      path:
+        desc: Directory or file to pack
+
+  - id: archive.zip.extract
+    cmd:
+      posix: unzip <path> -d <directory>
+      powershell: 'Expand-Archive -Path <path> -DestinationPath <directory>'
+    desc: Unpack a zip into a directory of its own
+    tags: [archive, zip, extract, unpack]
+    params:
+      path:
+        desc: Archive to unpack
+      directory:
+        desc: Directory to unpack into
+
+  - id: archive.zip.list
+    cmd:
+      posix: unzip -l <path>
+      powershell: '[IO.Compression.ZipFile]::OpenRead((Resolve-Path <path>)).Entries | Select-Object FullName, Length'
+    desc: Read what is inside a zip without unpacking it
+    tags: [archive, zip, list, inspect, preview]
+    params:
+      path:
+        desc: Archive to inspect
+
+  - id: archive.split.large-file
+    cmd:
+      posix: split -b <size:100M> <path> <prefix>
+    desc: Cut a file into pieces small enough to send
+    tags: [archive, split, chunk, transfer, size]
+    params:
+      size:
+        desc: Size of each piece, such as 100M
+      path:
+        desc: File to split
+      prefix:
+        desc: Name each piece starts with

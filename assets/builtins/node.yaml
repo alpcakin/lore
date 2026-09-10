@@ -1,0 +1,73 @@
+version: 1
+
+commands:
+
+  - id: node.deps.why
+    cmd: npm why <package>
+    desc: Find out which dependency is dragging a package in
+    tags: [node, npm, dependencies, transitive, why]
+    params:
+      package:
+        desc: Package to trace back
+
+  - id: node.deps.outdated
+    cmd: npm outdated
+    desc: See which dependencies have moved on without you
+    tags: [node, npm, outdated, dependencies, versions]
+
+  - id: node.deps.audit-production
+    cmd: npm audit --omit=dev
+    desc: Check the dependencies that actually ship, not the build tooling
+    tags: [node, npm, audit, security, vulnerabilities]
+
+  - id: node.install.clean
+    cmd: npm ci
+    desc: Install exactly what the lock file says, from an empty tree
+    tags: [node, npm, install, lockfile, reproducible, ci]
+
+  - id: node.run.without-installing
+    cmd: npx --yes <package> <arguments>
+    desc: Run a tool once without adding it to the project
+    tags: [node, npx, run, temporary, tool]
+    params:
+      package:
+        desc: Package providing the command
+      arguments:
+        desc: Arguments to pass to it
+
+  - id: node.scripts.list
+    cmd:
+      posix: jq -r '.scripts | keys[]' package.json
+      powershell: '(Get-Content package.json -Raw | ConvertFrom-Json).scripts | Get-Member -MemberType NoteProperty | Select-Object Name'
+    desc: Find out what this project can actually be told to do
+    tags: [node, npm, scripts, package-json, discover]
+
+  - id: node.debug.inspect
+    cmd: node --inspect-brk <path>
+    desc: Start a script paused so a debugger can attach before anything runs
+    tags: [node, debug, inspect, breakpoint, devtools]
+    params:
+      path:
+        desc: Script to run
+
+  - id: node.version.use
+    cmd: nvm use <version>
+    desc: Switch this shell to the version a project expects
+    tags: [node, nvm, version, switch]
+    params:
+      version:
+        desc: Version or alias, such as 20 or lts/iron
+
+  - id: node.cache.clear
+    cmd: npm cache clean --force
+    desc: Throw the download cache away when installs keep failing
+    tags: [node, npm, cache, clean, install]
+    danger: true
+
+  - id: node.size.bundle
+    cmd: npx --yes source-map-explorer <path>
+    desc: Find out what is making a bundle so large
+    tags: [node, bundle, size, source-map, performance]
+    params:
+      path:
+        desc: Built bundle file

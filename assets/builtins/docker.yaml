@@ -1,0 +1,146 @@
+version: 1
+
+commands:
+
+  - id: docker.ps.readable
+    cmd: 'docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"'
+    desc: List the running containers without the columns you never read
+    tags: [docker, ps, containers, format]
+
+  - id: docker.ps.all-with-size
+    cmd: 'docker ps -a --size --format "table {{.Names}}\t{{.Status}}\t{{.Size}}"'
+    desc: Find the stopped containers that are still taking up disk
+    tags: [docker, ps, stopped, size, disk]
+
+  - id: docker.logs.follow
+    cmd: docker logs -f --tail <lines:100> <container>
+    desc: Watch what a container is printing right now
+    tags: [docker, logs, follow, tail, debug]
+    params:
+      container:
+        desc: Container name or id
+      lines:
+        desc: How much history to show before following
+
+  - id: docker.logs.since
+    cmd: docker logs --since <since:10m> <container>
+    desc: Read only what a container printed during an incident
+    tags: [docker, logs, since, incident]
+    params:
+      container:
+        desc: Container name or id
+      since:
+        desc: Duration such as 10m, or a timestamp
+
+  - id: docker.exec.shell
+    cmd: docker exec -it <container> <shell:sh>
+    desc: Get a prompt inside a running container
+    tags: [docker, exec, shell, debug]
+    params:
+      container:
+        desc: Container name or id
+      shell:
+        desc: Shell to run, sh on alpine and bash on most others
+
+  - id: docker.inspect.ip
+    cmd: 'docker inspect -f "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}" <container>'
+    desc: Find the address a container is reachable on
+    tags: [docker, inspect, ip, network]
+    params:
+      container:
+        desc: Container name or id
+
+  - id: docker.inspect.mounts
+    cmd: 'docker inspect -f "{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}" <container>'
+    desc: Find out where a container's data actually lives on the host
+    tags: [docker, inspect, mounts, volumes]
+    params:
+      container:
+        desc: Container name or id
+
+  - id: docker.stats.snapshot
+    cmd: 'docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"'
+    desc: See which container is eating the machine
+    tags: [docker, stats, cpu, memory, performance]
+
+  - id: docker.run.throwaway
+    cmd: docker run --rm -it <image> <shell:sh>
+    desc: Poke around inside an image without leaving a container behind
+    tags: [docker, run, temporary, shell]
+    params:
+      image:
+        desc: Image to start
+      shell:
+        desc: Shell to run
+
+  - id: docker.run.mount-here
+    cmd:
+      posix: 'docker run --rm -it -v "$PWD:/work" -w /work <image> <command>'
+      powershell: 'docker run --rm -it -v "${PWD}:/work" -w /work <image> <command>'
+    desc: Run a tool from an image against the current directory
+    tags: [docker, run, volume, mount, workdir]
+    params:
+      image:
+        desc: Image holding the tool
+      command:
+        desc: Command to run inside it
+
+  - id: docker.image.layers
+    cmd: docker history --no-trunc <image>
+    desc: Find out which build step made an image so large
+    tags: [docker, image, history, layers, size]
+    params:
+      image:
+        desc: Image to break down
+
+  - id: docker.image.dangling
+    cmd: docker images -f dangling=true
+    desc: List the untagged images left behind by rebuilds
+    tags: [docker, images, dangling, cleanup]
+
+  - id: docker.prune.everything
+    cmd: docker system prune -a --volumes
+    desc: Reclaim disk by deleting every unused image, container and volume
+    tags: [docker, prune, cleanup, disk, space]
+    danger: true
+
+  - id: docker.compose.recreate
+    cmd: docker compose up -d --force-recreate <service>
+    desc: Restart one service from a clean container
+    tags: [docker, compose, restart, recreate]
+    params:
+      service:
+        desc: Service name from the compose file
+
+  - id: docker.compose.logs
+    cmd: docker compose logs -f --tail <lines:100> <service>
+    desc: Follow one service without the rest of the stack drowning it out
+    tags: [docker, compose, logs, follow]
+    params:
+      service:
+        desc: Service name from the compose file
+      lines:
+        desc: How much history to show before following
+
+  - id: docker.compose.config
+    cmd: docker compose config
+    desc: See the compose file with every variable and override resolved
+    tags: [docker, compose, config, debug, environment]
+
+  - id: docker.build.no-cache
+    cmd: docker build --no-cache --progress=plain -t <tag> .
+    desc: Rebuild from scratch and read every step, when the cache is lying
+    tags: [docker, build, cache, debug]
+    params:
+      tag:
+        desc: Name to give the image
+
+  - id: docker.cp.out
+    cmd: 'docker cp <container>:<path> .'
+    desc: Pull a file out of a container onto the host
+    tags: [docker, cp, copy, file]
+    params:
+      container:
+        desc: Container name or id
+      path:
+        desc: Path inside the container

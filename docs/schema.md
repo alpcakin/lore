@@ -23,10 +23,18 @@ is invalidated when the file changes.
 
 ```yaml
 version: 1
-namespace: git          # optional; prefixes ids for readability, not required
 commands: []            # list of entries
 disabled: []            # optional; list of id glob patterns to hide
 ```
+
+Unknown keys are rejected rather than ignored, so a typo is reported instead of
+silently doing nothing. Ids carry their namespace as a prefix (`git.log.graph`);
+there is no separate namespace key, because an id that only makes sense next to
+the file it was declared in cannot be overridden from anywhere else.
+
+The builtin library is one file per namespace, compiled into the binary. The
+user's own library is a single file, because it is meant to be read, edited and
+committed as one thing.
 
 ## Entry fields
 
@@ -80,8 +88,14 @@ params:
 placeholder. It is reserved in v1 of the schema and ignored by the MVP runtime;
 entries carrying it must still work by falling back to a free text prompt.
 
-The last value entered for a placeholder is remembered and pre-filled on the next
-use, so confirming a parameterised command normally costs a single keypress.
+When a command has two or more placeholders, the last value entered for each is
+remembered and pre-filled on the next use, so confirming one normally costs a
+single keypress.
+
+A command with exactly one placeholder never opens a form. It goes to the prompt
+with the placeholder cut out and the cursor sitting in the gap, so the value is
+typed against the shell's own completion, which knows about paths, branches and
+container names in a way no form can.
 
 ## Disabling builtins
 
