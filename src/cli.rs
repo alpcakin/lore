@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 
-use crate::model::{CommandBody, Entry, ShellFamily};
+use crate::model::{CommandBody, Entry, Layer, ShellFamily};
 use crate::shell::chord::{self, Chord};
 use crate::shell::{self, Shell};
-use crate::store::definitions::{self, NewEntry};
+use crate::store::definitions::{self, NewEntry, Written};
 use crate::store::stats::{self, Stats};
 use crate::store::{self};
 use crate::tui::{App, Outcome};
@@ -92,6 +92,29 @@ enum Command {
         tags: Option<String>,
     },
 
+    /// Change a command already in the library.
+    Edit {
+        id: String,
+
+        /// Shell whose command variant to replace. Detected when omitted.
+        #[arg(long)]
+        shell: Option<Shell>,
+
+        #[arg(long)]
+        cmd: Option<String>,
+
+        #[arg(long)]
+        desc: Option<String>,
+
+        /// Comma separated keywords, replacing the ones already there.
+        #[arg(long)]
+        tags: Option<String>,
+    },
+
+    /// Take a command out of the library.
+    #[command(alias = "remove")]
+    Rm { id: String },
+
     /// List commands without opening the picker.
     List {
         /// Shell to resolve command variants for.
@@ -119,6 +142,14 @@ impl Cli {
                 desc,
                 tags,
             } => save(command, desc, tags),
+            Command::Edit {
+                id,
+                shell,
+                cmd,
+                desc,
+                tags,
+            } => edit(id, family(shell), cmd, desc, tags),
+            Command::Rm { id } => remove(id),
             Command::List { shell } => list(family(shell)),
         }
     }
@@ -201,6 +232,85 @@ fn save(command: String, desc: String, tags: Option<String>) -> Result<()> {
     definitions::append(&library, &entry)?;
 
     println!("Saved as {} in {}", entry.id, library.display());
+    Ok(())
+}
+
+/// Applies the given changes to an entry, leaving every other field alone.
+///
+/// A builtin is written to the user's library under its own id rather than
+/// changed inside the binary, which the loader turns into an override.
+fn edit(
+    id: String,
+    family: ShellFamily,
+    cmd: Option<String>,
+    desc: Option<String>,
+    tags: Option<String>,
+) -> Result<()> {
+    if cmd.is_none() && desc.is_none() && tags.is_none() {
+        bail!("nothing to change, pass at least one of --cmd, --desc or --tags");
+    }
+
+    let library = store::user_library()?;
+    let entries = definitions::load(Some(&library))?;
+    let Some(entry) = entries.iter().find(|entry| entry.id == id) else {
+        bail!("no command with the id {id}");
+    };
+
+    // Only the variant for this shell is replaced. The others were never named
+    // and are none of this edit's business.
+    let body = match (&entry.cmd, cmd) {
+        (_, None) => entry.cmd.clone(),
+        (CommandBody::Shared(_), Some(cmd)) => CommandBody::Shared(cmd),
+        (CommandBody::PerShell(variants), Some(cmd)) => {
+            let mut variants = variants.clone();
+            variants.insert(family, cmd);
+            CommandBody::PerShell(variants)
+        }
+    };
+
+    let edited = NewEntry {
+        id: id.clone(),
+        cmd: body,
+        desc: desc.unwrap_or_else(|| entry.desc.clone()),
+        tags: tags
+            .map(|tags| definitions::parse_tags(&tags))
+            .unwrap_or_else(|| entry.tags.clone()),
+        params: entry.params.clone(),
+        danger: entry.danger,
+    };
+
+    match definitions::upsert(&library, &edited)? {
+        Written::Replaced => println!("Updated {id} in {}", library.display()),
+        Written::Appended => println!(
+            "Saved {id} to {}, overriding the builtin",
+            library.display()
+        ),
+    }
+
+    Ok(())
+}
+
+/// Takes an entry out of the picker.
+///
+/// A builtin lives inside the binary and cannot be deleted, so it is added to
+/// the user's disabled list instead. Either way it stops appearing, which is
+/// what was asked for.
+fn remove(id: String) -> Result<()> {
+    let library = store::user_library()?;
+    let entries = definitions::load(Some(&library))?;
+    let Some(entry) = entries.iter().find(|entry| entry.id == id) else {
+        bail!("no command with the id {id}");
+    };
+
+    if entry.layer == Layer::User {
+        definitions::remove(&library, &id)?;
+        println!("Removed {id} from {}", library.display());
+    } else {
+        definitions::disable(&library, &id)?;
+        println!("Hid {id}, listed under disabled in {}", library.display());
+    }
+
+    Stats::open(&store::stats_database()?)?.forget(&id)?;
     Ok(())
 }
 

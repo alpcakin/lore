@@ -25,7 +25,12 @@ type Screen = Terminal<CrosstermBackend<File>>;
 /// It opens as a panel under the command line rather than taking over the
 /// screen, so the prompt and the scrollback above it stay where they were.
 /// Ratatui clamps this to the terminal height.
-const HEIGHT: u16 = 16;
+///
+/// Seventeen is the hints, a blank row, the query, five for the detail pane and
+/// eight for the list. The hint line took one of the list's rows when it moved
+/// above the query; this buys it back, at the cost of one row of the user's
+/// screen every time the picker opens.
+const HEIGHT: u16 = 17;
 
 /// Runs the picker and returns what the shell should do.
 pub fn run(mut app: App) -> Result<Outcome> {
