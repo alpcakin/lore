@@ -1,7 +1,27 @@
 [package]
-name = "lore"
+name = "cmdlore"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "A command library that lives in your shell"
+authors = ["Alp Çakın <alpcakin@gmail.com>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/alpcakin/lore"
+homepage = "https://github.com/alpcakin/lore"
+documentation = "https://docs.rs/cmdlore"
+readme = "README.md"
+keywords = ["cli", "shell", "tui", "history", "productivity"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = ["/.github", "/docs/demo.tape", "/packaging"]
+
+# The crate is published as `cmdlore` because `lore` and `lore-cli` are both
+# taken. Everything a user ever types stays `lore`.
+[lib]
+name = "lore"
+
+[[bin]]
+name = "lore"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.104"
@@ -14,3 +34,8 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_yaml_ng = "0.10.0"
 thiserror = "2.0.20"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
