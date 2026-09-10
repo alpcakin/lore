@@ -6,11 +6,15 @@ function __lore_pick
     set -l recent (mktemp)
     history --max 50 > $recent
 
-    set -l selected (lore pick --shell fish --history $recent)
+    # The offset comes first on a line of its own, and fish splits command
+    # substitution on newlines, so the first element is the offset and the rest
+    # is the command.
+    set -l chosen (lore pick --shell fish --print-cursor --history $recent)
     rm -f $recent
 
-    if test -n "$selected"
-        commandline -r -- $selected
+    if test (count $chosen) -ge 2
+        commandline -r -- (string join \n $chosen[2..-1])
+        commandline -C $chosen[1]
     end
 
     commandline -f repaint

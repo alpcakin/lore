@@ -30,8 +30,24 @@ const ALREADY_SAVED: &str = "already saved";
 #[derive(Debug, PartialEq, Eq)]
 pub enum Outcome {
     /// Command to place in the prompt. Running it stays the user's decision.
-    Insert(String),
+    Insert {
+        command: String,
+        /// Where to leave the cursor, in characters from the start of the
+        /// command. `None` puts it at the end, which is where a finished
+        /// command wants it.
+        cursor: Option<usize>,
+    },
     Cancelled,
+}
+
+impl Outcome {
+    #[cfg(test)]
+    fn insert(command: &str) -> Self {
+        Self::Insert {
+            command: command.to_string(),
+            cursor: None,
+        }
+    }
 }
 
 pub enum Mode {
@@ -304,7 +320,27 @@ impl App {
         let names = params::names(&template);
         if names.is_empty() {
             self.stats.record_use(&entry_id, self.now)?;
-            return Ok(Some(Outcome::Insert(template)));
+            return Ok(Some(Outcome::Insert {
+                command: template,
+                cursor: None,
+            }));
+        }
+
+        // One placeholder is not worth a screen. The command goes to the prompt
+        // with the placeholder cut out and the cursor in the gap, so the value
+        // is typed against the shell's own completion rather than into a form
+        // that knows nothing about paths, branches or container names.
+        if let [placeholder] = params::parse(&template).as_slice() {
+            let span = placeholder.span.clone();
+            let cursor = template[..span.start].chars().count();
+            let mut command = template;
+            command.replace_range(span, "");
+
+            self.stats.record_use(&entry_id, self.now)?;
+            return Ok(Some(Outcome::Insert {
+                command,
+                cursor: Some(cursor),
+            }));
         }
 
         let remembered = self.stats.last_params(&entry_id)?;
@@ -362,7 +398,10 @@ impl App {
         }
         self.stats.record_use(&entry_id, self.now)?;
 
-        Ok(Some(Outcome::Insert(command)))
+        Ok(Some(Outcome::Insert {
+            command,
+            cursor: None,
+        }))
     }
 
     /// Opens the save screen on the last command the shell ran.
@@ -813,7 +852,7 @@ mod tests {
         let mut app = sample();
         typed(&mut app, "docker");
         let outcome = app.on_key(key(KeyCode::Enter)).unwrap();
-        assert_eq!(outcome, Some(Outcome::Insert("docker ps -a".to_string())));
+        assert_eq!(outcome, Some(Outcome::insert("docker ps -a")));
     }
 
     #[test]
@@ -865,9 +904,7 @@ mod tests {
 
         assert_eq!(
             outcome,
-            Some(Outcome::Insert(
-                "kubectl logs -f api-0 -n default".to_string()
-            ))
+            Some(Outcome::insert("kubectl logs -f api-0 -n default"))
         );
     }
 
@@ -900,7 +937,11 @@ mod tests {
 
     #[test]
     fn parameter_descriptions_reach_the_form() {
-        let mut with_desc = entry("one.param", "scan -p <path>", "Scan a directory");
+        let mut with_desc = entry(
+            "two.params",
+            "scan -p <path> --format <format>",
+            "Scan a directory",
+        );
         with_desc.params.insert(
             "path".to_string(),
             ParamSpec {
@@ -915,6 +956,51 @@ mod tests {
             panic!("expected the parameter form");
         };
         assert_eq!(form.fields[0].hint.as_deref(), Some("Directory to scan"));
+    }
+
+    /// A form is a poor place to type a path or a branch name: it knows nothing
+    /// the shell's own completion knows. One placeholder goes to the prompt
+    /// instead, with the cursor sitting in the gap it left.
+    #[test]
+    fn a_single_placeholder_lands_in_the_prompt_under_the_cursor() {
+        let mut app = app_with(vec![entry(
+            "one.param",
+            "scan -p <path>",
+            "Scan a directory",
+        )]);
+        let outcome = app.on_key(key(KeyCode::Enter)).unwrap();
+
+        assert_eq!(
+            outcome,
+            Some(Outcome::Insert {
+                command: "scan -p ".to_string(),
+                cursor: Some(8),
+            })
+        );
+    }
+
+    /// The shortcut is about typing one value, not about skipping the form. A
+    /// placeholder used twice still has to be filled in one place.
+    #[test]
+    fn a_placeholder_used_twice_still_opens_the_form() {
+        let mut app = app_with(vec![entry(
+            "twice",
+            "mv <name> <name>.bak",
+            "Back a file up in place",
+        )]);
+        assert_eq!(app.on_key(key(KeyCode::Enter)).unwrap(), None);
+        assert!(matches!(app.mode(), Mode::Params { .. }));
+    }
+
+    #[test]
+    fn a_command_with_no_placeholder_leaves_the_cursor_alone() {
+        let mut app = sample();
+        typed(&mut app, "docker");
+
+        let Some(Outcome::Insert { cursor, .. }) = app.on_key(key(KeyCode::Enter)).unwrap() else {
+            panic!("expected a command");
+        };
+        assert_eq!(cursor, None);
     }
 
     #[test]

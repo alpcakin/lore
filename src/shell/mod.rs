@@ -479,6 +479,31 @@ mod tests {
         }
     }
 
+    /// The cursor offset only reaches the prompt if every snippet asks for it
+    /// and then puts it somewhere. A snippet that asked and ignored the answer
+    /// would insert the offset as part of the command.
+    #[test]
+    fn every_snippet_asks_for_the_cursor_and_places_it() {
+        let placements = [
+            (Shell::Bash, "READLINE_POINT"),
+            (Shell::Zsh, "CURSOR"),
+            (Shell::Fish, "commandline -C"),
+            (Shell::PowerShell, "SetCursorPosition"),
+        ];
+
+        for (shell, placement) in placements {
+            let snippet = snippet(shell);
+            assert!(
+                snippet.contains("--print-cursor"),
+                "{shell:?} never asks for the cursor"
+            );
+            assert!(
+                snippet.contains(placement),
+                "{shell:?} never places the cursor"
+            );
+        }
+    }
+
     #[test]
     fn every_shell_knows_how_to_load_its_snippet() {
         for shell in ALL {

@@ -1,5 +1,5 @@
 __lore_pick() {
-    local selected recent status
+    local chosen recent status offset selected
 
     # Newest first, in a file rather than in arguments: Windows rebuilds a
     # child's argument list out of one string, so a command ending in a
@@ -9,15 +9,22 @@ __lore_pick() {
     recent="$(mktemp)"
     fc -lnr -50 2>/dev/null | sed 's/^[[:space:]]*//' > "$recent"
 
-    selected="$(lore pick --shell bash --history "$recent")"
+    chosen="$(lore pick --shell bash --print-cursor --history "$recent")"
     status=$?
     rm -f "$recent"
 
     [ $status -eq 0 ] || return
-    [ -n "$selected" ] || return
+    [ -n "$chosen" ] || return
+
+    # The offset comes first on a line of its own, so the command is whatever
+    # follows it and needs no parsing to recover.
+    offset="${chosen%%$'\n'*}"
+    selected="${chosen#*$'\n'}"
 
     READLINE_LINE="$selected"
-    READLINE_POINT=${#READLINE_LINE}
+    # READLINE_POINT indexes bytes and the offset counts characters. The
+    # interface is ASCII only, where the two are the same.
+    READLINE_POINT=$offset
 }
 
 # `bind` only exists in an interactive shell, and `bind -x` only takes effect in

@@ -62,6 +62,13 @@ enum Command {
         #[arg(long)]
         shell: Option<Shell>,
 
+        /// Print the cursor offset on a line of its own before the command.
+        ///
+        /// The shell integration passes this; running the picker by hand still
+        /// gets nothing but the command.
+        #[arg(long)]
+        print_cursor: bool,
+
         /// File of the calling shell's recent commands, newest first, one a
         /// line.
         // A file rather than arguments. Windows hands a child one string and
@@ -102,7 +109,11 @@ impl Cli {
             }
             Command::Setup { shell, key, yes } => shell::install(resolve(shell)?, key, yes),
             Command::Uninstall { shell } => shell::uninstall(resolve(shell)?),
-            Command::Pick { shell, history } => pick(family(shell), history.as_deref()),
+            Command::Pick {
+                shell,
+                print_cursor,
+                history,
+            } => pick(family(shell), print_cursor, history.as_deref()),
             Command::Save {
                 command,
                 desc,
@@ -131,14 +142,22 @@ fn family(shell: Option<Shell>) -> ShellFamily {
 ///
 /// Only the command goes to stdout: the shell integration captures it and puts
 /// it in the prompt. Pressing enter on it stays the user's decision.
-fn pick(family: ShellFamily, history: Option<&Path>) -> Result<()> {
+///
+/// With `print_cursor` the offset comes first, on its own line, and the command
+/// is everything after it. The offset leads so that the command stays the tail
+/// of the output and needs no parsing to recover.
+fn pick(family: ShellFamily, print_cursor: bool, history: Option<&Path>) -> Result<()> {
     let library = store::user_library()?;
     let entries = definitions::load(Some(&library))?;
     let stats = Stats::open(&store::stats_database()?)?;
 
     let history = read_history(history);
     let app = App::new(entries, family, stats, library, history, stats::now())?;
-    if let Outcome::Insert(command) = crate::tui::run(app)? {
+
+    if let Outcome::Insert { command, cursor } = crate::tui::run(app)? {
+        if print_cursor {
+            println!("{}", cursor.unwrap_or(command.chars().count()));
+        }
         println!("{command}");
     }
 

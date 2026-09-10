@@ -1,5 +1,5 @@
 __lore_pick() {
-    local selected recent status
+    local chosen recent status offset selected
 
     # Newest first, in a file rather than in arguments: Windows rebuilds a
     # child's argument list out of one string, so a command ending in a
@@ -9,13 +9,18 @@ __lore_pick() {
     recent="$(mktemp)"
     fc -lnr -50 2>/dev/null | sed 's/^[[:space:]]*//' > "$recent"
 
-    selected="$(lore pick --shell zsh --history "$recent")"
+    chosen="$(lore pick --shell zsh --print-cursor --history "$recent")"
     status=$?
     rm -f "$recent"
 
-    if [[ $status -eq 0 && -n "$selected" ]]; then
+    if [[ $status -eq 0 && -n "$chosen" ]]; then
+        # The offset comes first on a line of its own, so the command is
+        # whatever follows it and needs no parsing to recover.
+        offset="${chosen%%$'\n'*}"
+        selected="${chosen#*$'\n'}"
+
         BUFFER="$selected"
-        CURSOR=${#BUFFER}
+        CURSOR=$offset
     fi
 
     zle reset-prompt

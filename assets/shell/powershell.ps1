@@ -17,7 +17,9 @@ if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
             # code page, which loses anything outside it.
             [IO.File]::WriteAllLines($recent, $commands, (New-Object Text.UTF8Encoding $false))
 
-            $selected = & lore pick --shell powershell --history $recent
+            # The offset comes first on a line of its own, so the command is
+            # everything after it.
+            $chosen = @(& lore pick --shell powershell --print-cursor --history $recent)
         } finally {
             Remove-Item $recent -Force -ErrorAction SilentlyContinue
         }
@@ -29,9 +31,10 @@ if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
         # printed, moved it away from where PSReadLine last saw it.
         [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt($null, [Console]::CursorTop)
 
-        if ($LASTEXITCODE -eq 0 -and $selected) {
+        if ($LASTEXITCODE -eq 0 -and $chosen.Count -ge 2) {
             [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
-            [Microsoft.PowerShell.PSConsoleReadLine]::Insert(($selected -join ' '))
+            [Microsoft.PowerShell.PSConsoleReadLine]::Insert(($chosen[1..($chosen.Count - 1)] -join "`n"))
+            [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition([int]$chosen[0])
         }
     }
 }
