@@ -38,6 +38,16 @@ download() {
     fi
 }
 
+sha256_of() {
+    if command -v sha256sum > /dev/null 2>&1; then
+        sha256sum "$1" | cut -d' ' -f1
+    elif command -v shasum > /dev/null 2>&1; then
+        shasum -a 256 "$1" | cut -d' ' -f1
+    else
+        fail "no sha256 tool available, refusing to install unverified"
+    fi
+}
+
 version="${LORE_VERSION:-}"
 if [ -z "$version" ]; then
     version="$(download "https://api.github.com/repos/$REPO/releases/latest" /dev/stdout \
@@ -47,13 +57,27 @@ fi
 
 triple="$(target)"
 archive="lore-$version-$triple.tar.gz"
-url="https://github.com/$REPO/releases/download/$version/$archive"
+base="https://github.com/$REPO/releases/download/$version"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 echo "lore: downloading $version for $triple"
-download "$url" "$work/$archive" || fail "could not download $url"
+download "$base/$archive" "$work/$archive" || fail "could not download $base/$archive"
+
+# The archive travels over https from a host nobody here controls the contents
+# of after the fact. The checksums are published with the release, so verifying
+# costs one more request and turns a swapped asset into a refusal.
+download "$base/SHA256SUMS" "$work/SHA256SUMS" || fail "could not download the checksums"
+
+# GNU sha256sum separates with two spaces and its binary mode with a space and
+# a star, so both are accepted.
+expected="$(sed -n "s/^\([0-9a-f]\{64\}\)[ *][ *]*$archive\$/\1/p" "$work/SHA256SUMS")"
+[ -n "$expected" ] || fail "$archive is not listed in SHA256SUMS"
+
+actual="$(sha256_of "$work/$archive")"
+[ "$expected" = "$actual" ] || fail "checksum mismatch for $archive, refusing to install"
+
 tar xzf "$work/$archive" -C "$work"
 
 mkdir -p "$BIN_DIR"

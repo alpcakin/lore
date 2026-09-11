@@ -5,23 +5,30 @@ name: Demo
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   render:
     name: render
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # Third party actions are pinned to a commit rather than a tag: a tag can
+      # be moved onto different code without anything here changing.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - run: cargo build --release
       - run: echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
 
-      - uses: charmbracelet/vhs-action@v2
+      - uses: charmbracelet/vhs-action@f6d7db07a432fcd3b06772628d36a57f96d95dcf # v2.1.1
         with:
           path: docs/demo.tape
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: demo-gif
           path: docs/demo.gif

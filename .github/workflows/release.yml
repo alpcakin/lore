@@ -4,8 +4,10 @@ on:
   push:
     tags: ["v*"]
 
+# Read by default. Only the job that opens the release is given more, and only
+# that job gets it.
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -43,18 +45,26 @@ jobs:
             packages: musl-tools
 
     steps:
-      - uses: actions/checkout@v7
+      # Third party actions are pinned to a commit rather than a tag: a tag can
+      # be moved onto different code without anything here changing.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ matrix.target }}
 
       - if: matrix.packages
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.packages }}
+
+      # A tag can be pushed onto any commit, so nothing is shipped before the
+      # suite has run against the code actually being released. Every target is
+      # native here, so the tests run on the binary that will be shipped.
+      - run: cargo test --locked --target ${{ matrix.target }}
 
       - name: Build
         # rusqlite compiles sqlite3.c, so the musl target needs a compiler that
@@ -87,7 +97,7 @@ jobs:
             shasum -a 256 "$asset" > "$asset.sha256"
           fi
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.target }}
           path: |
@@ -100,8 +110,10 @@ jobs:
     name: release
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts
           merge-multiple: true
@@ -112,19 +124,23 @@ jobs:
           cat *.sha256 > SHA256SUMS
           rm -- *.sha256
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           draft: true
           generate_release_notes: true
           files: artifacts/*
 
+  # Separate from the release job so that the one holding the registry token
+  # never also holds write access to this repository.
   publish:
     name: crates.io
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable
       - run: cargo publish --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
