@@ -28,11 +28,18 @@ jobs:
         with:
           path: docs/demo.tape
 
-      # vhs reports success even when the encode produces nothing, so the gif is
-      # looked for rather than assumed.
+      # The action swallows whatever vhs writes to stderr, and vhs exits zero
+      # even when the encode produces nothing, so it is run again here with its
+      # output visible.
+      - name: Render with the output visible
+        run: |
+          which vhs ffmpeg ttyd || true
+          ffmpeg -version | head -1 || true
+          vhs docs/demo.tape 2>&1 | tee vhs.log || true
+          ls -la
+
       - name: Collect the gif
         run: |
-          find . -name '*.gif' -not -path './target/*' -exec ls -l {} +
           test -f demo.gif || { echo "vhs produced no gif"; exit 1; }
           mv demo.gif docs/demo.gif
 
