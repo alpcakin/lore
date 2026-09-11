@@ -3,6 +3,11 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # A rehearsal: builds and tests every target and leaves the archives as
+  # artifacts, without opening a release or publishing anything. A version
+  # number on crates.io can never be reused, so the matrix is worth proving
+  # before one is spent.
+  workflow_dispatch:
 
 # Read by default. Only the job that opens the release is given more, and only
 # that job gets it.
@@ -109,6 +114,7 @@ jobs:
   release:
     name: release
     needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -135,6 +141,7 @@ jobs:
   publish:
     name: crates.io
     needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
