@@ -24,28 +24,21 @@ jobs:
       - run: cargo build --release
       - run: echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
 
+      # Pinned because 0.12.0 runs the whole tape and then writes no gif, with
+      # nothing on stderr to say why. Both the shipped ffmpeg and the
+      # distribution one encode a gif fine on their own, so it is vhs.
       - uses: charmbracelet/vhs-action@f6d7db07a432fcd3b06772628d36a57f96d95dcf # v2.1.1
         with:
           path: docs/demo.tape
+          version: v0.11.0
 
-      - name: Render with the output visible
-        run: |
-          echo "== can the toolcache ffmpeg write a gif at all =="
-          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=320x240:rate=10 \
-            -t 1 -y /tmp/probe.gif && ls -l /tmp/probe.gif || echo "toolcache ffmpeg cannot"
-
-          echo "== distribution ffmpeg =="
-          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-          /usr/bin/ffmpeg -version | head -1
-
-          echo "== vhs, distribution ffmpeg first on PATH =="
-          PATH="/usr/bin:$PATH" vhs docs/demo.tape || true
-          ls -l demo.gif || echo "still no gif"
-
+      # vhs exits zero whether or not the encode produced anything, so the gif
+      # is looked for rather than assumed.
       - name: Collect the gif
         run: |
           test -f demo.gif || { echo "vhs produced no gif"; exit 1; }
           mv demo.gif docs/demo.gif
+          ls -l docs/demo.gif
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
