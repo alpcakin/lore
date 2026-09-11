@@ -577,7 +577,7 @@ fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
             picker_hints()
         }
         Mode::Params { .. } => form_hints("back"),
-        Mode::Save { .. } | Mode::Edit { .. } => form_hints("cancel"),
+        Mode::Save { .. } | Mode::Edit { .. } => saving_hints(),
     }
 }
 
@@ -596,6 +596,15 @@ fn browse_hints() -> Vec<(&'static str, &'static str)> {
 
 fn form_hints(escape: &'static str) -> Vec<(&'static str, &'static str)> {
     vec![("enter", "next"), ("esc", escape), ("^u", "clear")]
+}
+
+/// The screens that write something can be submitted from any field, so the
+/// chord that does it belongs on the line. The placeholder screen has no such
+/// chord: what it does at the end is insert a command, not save one.
+fn saving_hints() -> Vec<(&'static str, &'static str)> {
+    let mut hints = form_hints("cancel");
+    hints.push(("^s", "save"));
+    hints
 }
 
 /// `^u` still empties the filter, as it does every other line of text, but it
@@ -731,7 +740,12 @@ mod tests {
     /// to survive the narrowest terminal worth supporting.
     #[test]
     fn no_hint_line_outgrows_a_narrow_terminal() {
-        let lines = [browse_hints(), form_hints("cancel"), picker_hints()];
+        let lines = [
+            browse_hints(),
+            form_hints("back"),
+            saving_hints(),
+            picker_hints(),
+        ];
 
         for hints in lines {
             let width = hints

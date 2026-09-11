@@ -22,7 +22,8 @@ First release.
 - A configurable keybinding: `lore setup --key alt-r`, written as
   `ctrl-<letter>` or `alt-<letter>`, with keys the terminal owns refused
 - Saving from inside the picker with `ctrl+s`, offering the shell's recent
-  commands, and editing with `ctrl+e`
+  commands, and editing with `ctrl+e`. Both screens submit on `ctrl+s` from any
+  field
 - Removal with `ctrl+x`, which deletes your own entry and hides a builtin
 - A command line equivalent for everything but the picker: `save`, `edit`, `rm`
   and `list`

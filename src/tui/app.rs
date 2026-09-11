@@ -278,6 +278,9 @@ impl App {
                 }
             }
             KeyCode::BackTab => form.retreat(),
+            // Submits from wherever the cursor is, rather than making the user
+            // walk the rest of the fields to reach the end.
+            KeyCode::Char('s') if control => self.finish_save()?,
             KeyCode::Char('u') if control => form.clear(),
             KeyCode::Backspace => form.backspace(),
             KeyCode::Char(character) if !control => form.insert(character),
@@ -300,6 +303,7 @@ impl App {
                 }
             }
             KeyCode::Up | KeyCode::BackTab => form.retreat(),
+            KeyCode::Char('s') if control => self.finish_edit()?,
             KeyCode::Char('u') if control => form.clear(),
             KeyCode::Backspace => form.backspace(),
             KeyCode::Char(character) if !control => form.insert(character),
@@ -1288,6 +1292,48 @@ mod tests {
         assert!(text.contains("--graph"), "wrote {text:?}");
 
         let _ = std::fs::remove_file(&app.library);
+    }
+
+    /// Three fields is two keystrokes of nothing on the way to the one that
+    /// matters, so the chord submits from wherever the cursor happens to be.
+    #[test]
+    fn ctrl_s_submits_the_edit_form_from_any_field() {
+        let mut app = app_with(vec![entry("git.log", "git log --oneline", "Show history")]);
+
+        app.on_key(ctrl('e')).unwrap();
+        typed(&mut app, " --graph");
+        app.on_key(ctrl('s')).unwrap();
+
+        assert!(matches!(app.mode(), Mode::Browse));
+        assert_eq!(app.selected_row().unwrap().cmd, "git log --oneline --graph");
+
+        let _ = std::fs::remove_file(&app.library);
+    }
+
+    #[test]
+    fn ctrl_s_submits_the_save_form_from_any_field() {
+        let mut app = sample();
+
+        app.on_key(ctrl('s')).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        typed(&mut app, "Scan this project");
+        app.on_key(ctrl('s')).unwrap();
+
+        assert!(matches!(app.mode(), Mode::Browse));
+        assert!(app.status().unwrap().contains("user.kics-scan"));
+
+        let _ = std::fs::remove_file(&app.library);
+    }
+
+    /// Submitting early must not skip the check that the entry is findable.
+    #[test]
+    fn the_chord_still_refuses_an_entry_with_no_description() {
+        let mut app = sample();
+        app.on_key(ctrl('s')).unwrap();
+        app.on_key(ctrl('s')).unwrap();
+
+        assert!(matches!(app.mode(), Mode::Save { .. }));
+        assert!(app.status().unwrap().contains("description"));
     }
 
     #[test]

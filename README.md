@@ -106,6 +106,9 @@ Inside the picker:
 | `ctrl+p` | Pin an entry to the top                             |
 | `ctrl+x` | Remove an entry, confirmed by pressing it again     |
 
+On the save and edit screens, `ctrl+s` submits from whichever field you are in,
+so you never have to walk the rest of them to finish.
+
 lore never runs anything. It puts the command in your prompt and pressing enter
 stays your decision.
 
