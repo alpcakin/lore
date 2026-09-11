@@ -5,9 +5,11 @@
 #
 #   vhs docs/demo.tape
 #
-# Requires lore on PATH. The demo workflow builds it and runs this on Linux.
+# Requires lore on PATH. The demo workflow builds it and runs this on Linux,
+# then moves the gif into docs. The output is a bare name because vhs resolves
+# it against the working directory rather than against this file.
 
-Output docs/demo.gif
+Output demo.gif
 
 Require lore
 

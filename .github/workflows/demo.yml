@@ -28,6 +28,14 @@ jobs:
         with:
           path: docs/demo.tape
 
+      # vhs reports success even when the encode produces nothing, so the gif is
+      # looked for rather than assumed.
+      - name: Collect the gif
+        run: |
+          find . -name '*.gif' -not -path './target/*' -exec ls -l {} +
+          test -f demo.gif || { echo "vhs produced no gif"; exit 1; }
+          mv demo.gif docs/demo.gif
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: demo-gif
