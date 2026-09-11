@@ -28,15 +28,19 @@ jobs:
         with:
           path: docs/demo.tape
 
-      # The action swallows whatever vhs writes to stderr, and vhs exits zero
-      # even when the encode produces nothing, so it is run again here with its
-      # output visible.
       - name: Render with the output visible
         run: |
-          which vhs ffmpeg ttyd || true
-          ffmpeg -version | head -1 || true
-          vhs docs/demo.tape 2>&1 | tee vhs.log || true
-          ls -la
+          echo "== can the toolcache ffmpeg write a gif at all =="
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=320x240:rate=10 \
+            -t 1 -y /tmp/probe.gif && ls -l /tmp/probe.gif || echo "toolcache ffmpeg cannot"
+
+          echo "== distribution ffmpeg =="
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          /usr/bin/ffmpeg -version | head -1
+
+          echo "== vhs, distribution ffmpeg first on PATH =="
+          PATH="/usr/bin:$PATH" vhs docs/demo.tape || true
+          ls -l demo.gif || echo "still no gif"
 
       - name: Collect the gif
         run: |
