@@ -23,7 +23,8 @@ would actually search for, versioned in git, and open one keystroke away.
 ## Install
 
 Nothing here needs administrator rights. Everything installs under your home
-directory.
+directory. Every route that installs for you checks the archive against the
+sha256 published with the release and refuses anything that does not match.
 
 **Windows (Scoop)**
 
@@ -63,9 +64,11 @@ cargo install cmdlore
 **Prebuilt binaries**
 
 Every release carries an archive for Windows, macOS on Intel and Apple silicon,
-and Linux on x86_64 and arm64. Download it from the
-[releases page](https://github.com/alpcakin/lore/releases), unpack it, and put
-`lore` somewhere on your PATH.
+and Linux on x86_64 and arm64, plus a statically linked build that runs on any
+Linux whatever its glibc. Download one from the
+[releases page](https://github.com/alpcakin/lore/releases), check it against the
+`SHA256SUMS` published beside it, unpack it, and put `lore` somewhere on your
+PATH.
 
 ## Set up
 
@@ -147,11 +150,11 @@ exactly the lines between the markers and leaves everything else alone.
 
 Your own commands live in one YAML file, meant to be read, edited and committed:
 
-| Platform | Path                                                     |
-|----------|----------------------------------------------------------|
-| Linux    | `~/.config/lore/commands.yaml`                           |
-| macOS    | `~/Library/Application Support/lore/commands.yaml`       |
-| Windows  | `%APPDATA%\lore\commands.yaml`                           |
+| Platform | Library                                            | Usage statistics                            |
+|----------|----------------------------------------------------|---------------------------------------------|
+| Linux    | `~/.config/lore/commands.yaml`                     | `~/.local/share/lore/stats.db`              |
+| macOS    | `~/Library/Application Support/lore/commands.yaml` | `~/Library/Application Support/lore/stats.db` |
+| Windows  | `%APPDATA%\lore\config\commands.yaml`              | `%APPDATA%\lore\data\stats.db`              |
 
 ```yaml
 version: 1
@@ -168,9 +171,9 @@ commands:
 Saving, editing and removing all splice single entries in and out of this file
 rather than rewriting it, so your comments and your ordering survive.
 
-Usage statistics live somewhere else entirely, in the platform's data directory,
-because syncing your definitions through git should never produce churn or a
-merge conflict.
+Usage statistics are kept in a separate file, and on most platforms a separate
+directory, because syncing your definitions through git should never produce
+churn or a merge conflict. They are local to the machine and never synced.
 
 Set `LORE_CONFIG_DIR` and `LORE_DATA_DIR` to put either somewhere else, which is
 what a portable install on a stick wants.
