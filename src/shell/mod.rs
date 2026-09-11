@@ -479,6 +479,60 @@ mod tests {
         }
     }
 
+    /// The bug this guards against cost a release: the picker draws a panel
+    /// under the prompt, which means asking the terminal where the cursor is,
+    /// and that question goes out on stdout. A snippet that captured stdout to
+    /// read the result swallowed it, no answer ever came back, and the panel
+    /// never opened. It only worked on Windows, where the position is read from
+    /// the console rather than asked for.
+    #[test]
+    fn no_snippet_captures_the_pickers_stdout() {
+        for shell in ALL {
+            let snippet = snippet(shell);
+            assert!(
+                snippet.contains("--output"),
+                "{shell:?} does not ask for the result in a file"
+            );
+
+            let invocation = snippet
+                .lines()
+                .find(|line| line.contains("lore pick"))
+                .expect("every snippet runs the picker")
+                .to_string();
+
+            assert!(
+                !invocation.contains('='),
+                "{shell:?} assigns the picker's output: {invocation}"
+            );
+            assert!(
+                !invocation.contains("$("),
+                "{shell:?} captures the picker's output: {invocation}"
+            );
+            assert!(
+                !invocation.contains("(lore"),
+                "{shell:?} captures the picker's output: {invocation}"
+            );
+        }
+    }
+
+    /// The result file is the caller's to clean up, and it is one more than the
+    /// history file, so both have to be named on the way out.
+    #[test]
+    fn every_snippet_removes_both_of_its_temporary_files() {
+        for shell in ALL {
+            let snippet = snippet(shell);
+            let cleanup = snippet
+                .lines()
+                .find(|line| line.contains("rm -f") || line.contains("Remove-Item"))
+                .expect("every snippet cleans up");
+
+            assert!(
+                cleanup.contains("recent") && cleanup.contains("out"),
+                "{shell:?} leaves a temporary file behind: {cleanup}"
+            );
+        }
+    }
+
     /// The cursor offset only reaches the prompt if every snippet asks for it
     /// and then puts it somewhere. A snippet that asked and ignored the answer
     /// would insert the offset as part of the command.

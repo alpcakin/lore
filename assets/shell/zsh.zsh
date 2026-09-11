@@ -1,5 +1,5 @@
 __lore_pick() {
-    local chosen recent status offset selected
+    local recent out offset selected
 
     # Newest first, in a file rather than in arguments: Windows rebuilds a
     # child's argument list out of one string, so a command ending in a
@@ -7,18 +7,22 @@ __lore_pick() {
     # way. A multi-line command still arrives as one entry per line, which fc
     # gives no way around.
     recent="$(mktemp)"
+    out="$(mktemp)"
     fc -lnr -50 2>/dev/null | sed 's/^[[:space:]]*//' > "$recent"
 
-    chosen="$(lore pick --shell zsh --print-cursor --history "$recent")"
-    status=$?
-    rm -f "$recent"
+    # Deliberately not a command substitution. The picker draws a panel under
+    # the prompt, which means asking the terminal where the cursor is, and that
+    # question goes out on stdout. A captured stdout swallows it, no answer
+    # comes back, and the panel never opens. The result comes back in a file so
+    # stdout can stay attached to the terminal.
+    lore pick --shell zsh --print-cursor --history "$recent" --output "$out"
 
-    if [[ $status -eq 0 && -n "$chosen" ]]; then
-        # The offset comes first on a line of its own, so the command is
-        # whatever follows it and needs no parsing to recover.
-        offset="${chosen%%$'\n'*}"
-        selected="${chosen#*$'\n'}"
+    # The offset is first on a line of its own, so the command is the rest.
+    offset="$(head -n 1 "$out")"
+    selected="$(tail -n +2 "$out")"
+    rm -f "$recent" "$out"
 
+    if [[ -n "$selected" ]]; then
         BUFFER="$selected"
         CURSOR=$offset
     fi

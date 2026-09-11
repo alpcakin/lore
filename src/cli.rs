@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
 use crate::model::{CommandBody, Entry, Layer, ShellFamily};
@@ -68,6 +68,15 @@ enum Command {
         /// gets nothing but the command.
         #[arg(long)]
         print_cursor: bool,
+
+        /// File to write the result into instead of stdout.
+        // The picker has to ask the terminal where the cursor is, and the
+        // library it uses writes that question to stdout. A shell that captured
+        // stdout to read the result would swallow the question, no answer would
+        // come back, and the panel would never open. The result travels in a
+        // file so stdout can stay attached to the terminal.
+        #[arg(long)]
+        output: Option<PathBuf>,
 
         /// File of the calling shell's recent commands, newest first, one a
         /// line.
@@ -135,8 +144,14 @@ impl Cli {
             Command::Pick {
                 shell,
                 print_cursor,
+                output,
                 history,
-            } => pick(family(shell), print_cursor, history.as_deref()),
+            } => pick(
+                family(shell),
+                print_cursor,
+                output.as_deref(),
+                history.as_deref(),
+            ),
             Command::Save {
                 command,
                 desc,
@@ -171,13 +186,23 @@ fn family(shell: Option<Shell>) -> ShellFamily {
 
 /// Opens the picker and writes the chosen command to stdout.
 ///
-/// Only the command goes to stdout: the shell integration captures it and puts
-/// it in the prompt. Pressing enter on it stays the user's decision.
+/// Runs the picker and hands back the chosen command. Pressing enter on it
+/// stays the user's decision.
+///
+/// The result goes to `output` when one is given and to stdout otherwise. The
+/// shell integration always gives one: the picker asks the terminal where the
+/// cursor is by writing to stdout, so a shell that captured stdout to read the
+/// result would swallow the question and the panel would never open.
 ///
 /// With `print_cursor` the offset comes first, on its own line, and the command
 /// is everything after it. The offset leads so that the command stays the tail
-/// of the output and needs no parsing to recover.
-fn pick(family: ShellFamily, print_cursor: bool, history: Option<&Path>) -> Result<()> {
+/// and needs no parsing to recover.
+fn pick(
+    family: ShellFamily,
+    print_cursor: bool,
+    output: Option<&Path>,
+    history: Option<&Path>,
+) -> Result<()> {
     let library = store::user_library()?;
     let entries = definitions::load(Some(&library))?;
     let stats = Stats::open(&store::stats_database()?)?;
@@ -185,11 +210,22 @@ fn pick(family: ShellFamily, print_cursor: bool, history: Option<&Path>) -> Resu
     let history = read_history(history);
     let app = App::new(entries, family, stats, library, history, stats::now())?;
 
-    if let Outcome::Insert { command, cursor } = crate::tui::run(app)? {
-        if print_cursor {
-            println!("{}", cursor.unwrap_or(command.chars().count()));
-        }
-        println!("{command}");
+    let Outcome::Insert { command, cursor } = crate::tui::run(app)? else {
+        return Ok(());
+    };
+
+    let mut result = String::new();
+    if print_cursor {
+        let offset = cursor.unwrap_or(command.chars().count());
+        result.push_str(&format!("{offset}\n"));
+    }
+    result.push_str(&command);
+    result.push('\n');
+
+    match output {
+        Some(path) => fs::write(path, result)
+            .with_context(|| format!("failed to write {}", path.display()))?,
+        None => print!("{result}"),
     }
 
     Ok(())

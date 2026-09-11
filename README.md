@@ -146,6 +146,12 @@ copied into the profile, so an upgraded binary cannot disagree with a stale copy
 on disk. It reads no files and does nothing but print. `lore uninstall` removes
 exactly the lines between the markers and leaves everything else alone.
 
+Your recent commands go in, and the chosen one comes back, through two temporary
+files the snippet creates and deletes around each use. Neither travels on stdout:
+the picker draws under your prompt, which means asking the terminal where the
+cursor is, and that question goes out on stdout. A shell that captured stdout to
+read the result would swallow the question, and the panel would never open.
+
 ## Your library
 
 Your own commands live in one YAML file, meant to be read, edited and committed:
