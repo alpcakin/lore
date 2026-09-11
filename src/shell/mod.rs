@@ -556,11 +556,19 @@ mod tests {
         assert_eq!(from_program("/bin/bash"), Some(Shell::Bash));
         assert_eq!(from_program("/usr/bin/zsh"), Some(Shell::Zsh));
         assert_eq!(from_program("/usr/local/bin/fish"), Some(Shell::Fish));
+        assert_eq!(from_program("pwsh.exe"), Some(Shell::PowerShell));
+        assert_eq!(from_program("/usr/bin/nu"), None);
+    }
+
+    /// A backslash only separates directories on Windows, which is also the only
+    /// place a path shaped like this can reach SHELL.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_path_is_split_the_windows_way() {
         assert_eq!(
             from_program(r"C:\Program Files\PowerShell\7\pwsh.exe"),
             Some(Shell::PowerShell)
         );
-        assert_eq!(from_program("/usr/bin/nu"), None);
     }
 
     #[test]
