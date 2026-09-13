@@ -39,6 +39,17 @@ const CHORD: &str = "{{chord}}";
 const BEGIN: &str = "# >>> lore >>>";
 const END: &str = "# <<< lore <<<";
 
+/// Directories a shell already has on its PATH before any profile runs.
+/// Guarding one of these would be noise.
+const SYSTEM_BIN: &[&str] = &[
+    "/bin",
+    "/sbin",
+    "/usr/bin",
+    "/usr/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+];
+
 impl From<Shell> for ShellFamily {
     fn from(shell: Shell) -> Self {
         match shell {
@@ -294,7 +305,60 @@ pub fn uninstall(shell: Shell) -> Result<()> {
 }
 
 fn block(shell: Shell, chord: Chord) -> String {
-    format!("\n{BEGIN}\n{}\n{END}\n", init_line(shell, chord))
+    let mut body = String::new();
+    if let Some(guard) = path_guard(shell) {
+        body.push_str(&guard);
+        body.push('\n');
+    }
+    body.push_str(&init_line(shell, chord));
+
+    format!("\n{BEGIN}\n{body}\n{END}\n")
+}
+
+/// The line that puts the binary's own directory on PATH, when it needs one.
+///
+/// Ubuntu's `~/.profile` sources `~/.bashrc` and only then adds `~/.local/bin`
+/// to PATH, so a login shell reaches the block below with lore not yet
+/// findable. The eval produces nothing, no key is bound, and nothing says why.
+/// Every WSL terminal and every ssh session is a login shell, so this is the
+/// ordinary case rather than an exotic one.
+fn path_guard(shell: Shell) -> Option<String> {
+    let exe = env::current_exe().ok()?;
+    let directory = exe.parent()?.to_str()?;
+
+    guard_line(shell, directory)
+}
+
+/// Split from `path_guard` so the quoting can be tested without installing
+/// anything anywhere.
+fn guard_line(shell: Shell, directory: &str) -> Option<String> {
+    // Windows composes a process's PATH before it starts, so a profile always
+    // runs with the whole of it.
+    if shell == Shell::PowerShell || SYSTEM_BIN.contains(&directory) {
+        return None;
+    }
+
+    Some(match shell {
+        Shell::Fish => {
+            let quoted = fish_quoted(directory);
+            format!("contains {quoted} $PATH; or set -gx PATH {quoted} $PATH")
+        }
+        _ => {
+            let quoted = posix_quoted(directory);
+            format!(r#"case ":$PATH:" in *:{quoted}:*) ;; *) PATH={quoted}:"$PATH" ;; esac"#)
+        }
+    })
+}
+
+/// Wraps a path so a shell reads it literally, whatever it contains.
+fn posix_quoted(text: &str) -> String {
+    format!("'{}'", text.replace('\'', r"'\''"))
+}
+
+/// Fish reads a backslash inside single quotes as an escape, which no other
+/// posix shell does.
+fn fish_quoted(text: &str) -> String {
+    format!("'{}'", text.replace('\\', r"\\").replace('\'', r"\'"))
 }
 
 /// Drops the marked block, leaving everything the user wrote untouched.
@@ -578,6 +642,69 @@ mod tests {
                 "{shell:?} loses the chord"
             );
         }
+    }
+
+    /// The bug this guards against made lore look broken on every WSL terminal
+    /// and every ssh session: Ubuntu's ~/.profile sources ~/.bashrc and only
+    /// then adds ~/.local/bin to PATH, so the block ran with lore not yet
+    /// findable, the eval produced nothing, and no key was bound.
+    #[test]
+    fn a_binary_outside_the_system_directories_gets_a_path_guard() {
+        for shell in [Shell::Bash, Shell::Zsh] {
+            let guard = guard_line(shell, "/home/alp/.local/bin").expect("should guard");
+            assert!(guard.contains("'/home/alp/.local/bin'"), "{guard}");
+            assert!(guard.contains("PATH="), "{guard}");
+        }
+
+        let guard = guard_line(Shell::Fish, "/home/alp/.local/bin").expect("should guard");
+        assert!(guard.contains("set -gx PATH"), "{guard}");
+    }
+
+    /// Windows composes a process's PATH before it starts, and a shell already
+    /// has the system directories, so a guard there is noise.
+    #[test]
+    fn nothing_is_guarded_that_is_already_reachable() {
+        assert_eq!(guard_line(Shell::PowerShell, r"C:	ools\lore"), None);
+
+        for directory in SYSTEM_BIN {
+            assert_eq!(guard_line(Shell::Bash, directory), None, "{directory}");
+        }
+    }
+
+    /// A guard that ran twice would put the directory on PATH twice, and one
+    /// that mangled a path with a space in it would put the wrong thing there.
+    #[test]
+    fn the_guard_is_quoted_and_survives_being_run_twice() {
+        let guard = guard_line(Shell::Bash, "/home/o'dd dir/bin").expect("should guard");
+
+        let quoted = r"'/home/o'\''dd dir/bin'";
+        assert!(guard.contains(quoted), "{guard}");
+        assert_eq!(
+            guard.matches(quoted).count(),
+            2,
+            "the test and the assignment should both be quoted: {guard}"
+        );
+    }
+
+    /// Fish reads a backslash inside single quotes as an escape, which no other
+    /// posix shell does.
+    #[test]
+    fn fish_escapes_what_the_other_shells_do_not() {
+        assert_eq!(posix_quoted(r"/a\b"), r"'/a\b'");
+        assert_eq!(fish_quoted(r"/a\b"), r"'/a\\b'");
+        assert_eq!(posix_quoted("/a'b"), r"'/a'\''b'");
+        assert_eq!(fish_quoted("/a'b"), r"'/a\'b'");
+    }
+
+    /// The guard lives inside the markers, so removing the block takes it with
+    /// it and leaves the profile as it was.
+    #[test]
+    fn uninstalling_takes_the_guard_with_it() {
+        let original = "export EDITOR=vim
+";
+        let installed = format!("{original}{}", block(Shell::Bash, Chord::default()));
+
+        assert_eq!(strip(&installed).trim_end(), original.trim_end());
     }
 
     #[test]
