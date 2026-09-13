@@ -385,11 +385,16 @@ fn strip(existing: &str) -> String {
     out
 }
 
+/// Copies a profile aside before it is written to.
+///
+/// The suffix is appended to the whole file name rather than replacing an
+/// extension. Every profile worth backing up is a dotfile, and `with_extension`
+/// treats `.bashrc` as having none, which produced `.bashrc..lore-backup`.
 fn back_up(path: &Path) -> Result<PathBuf> {
-    let backup = path.with_extension(format!(
-        "{}.lore-backup",
-        path.extension().and_then(|e| e.to_str()).unwrap_or("")
-    ));
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".lore-backup");
+    let backup = path.with_file_name(name);
+
     fs::copy(path, &backup).with_context(|| format!("failed to back up {}", path.display()))?;
     Ok(backup)
 }
@@ -705,6 +710,37 @@ mod tests {
         let installed = format!("{original}{}", block(Shell::Bash, Chord::default()));
 
         assert_eq!(strip(&installed).trim_end(), original.trim_end());
+    }
+
+    /// Every profile worth backing up is a dotfile, and with_extension treats
+    /// one as having no extension, which produced .bashrc..lore-backup.
+    #[test]
+    fn a_backup_is_named_after_the_whole_file() {
+        let scratch = std::env::temp_dir().join(format!("lore-backup-{}", std::process::id()));
+        let _ = fs::create_dir_all(&scratch);
+
+        for name in [".bashrc", "profile.ps1"] {
+            let path = scratch.join(name);
+            fs::write(
+                &path,
+                "original
+",
+            )
+            .unwrap();
+
+            let backup = back_up(&path).unwrap();
+            assert_eq!(
+                backup.file_name().unwrap(),
+                std::ffi::OsStr::new(&format!("{name}.lore-backup"))
+            );
+            assert_eq!(
+                fs::read_to_string(&backup).unwrap(),
+                "original
+"
+            );
+        }
+
+        let _ = fs::remove_dir_all(&scratch);
     }
 
     #[test]
