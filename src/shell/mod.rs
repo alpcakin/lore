@@ -158,12 +158,14 @@ pub fn profiles(shell: Shell) -> Result<Vec<Profile>> {
         Shell::Bash => Ok(vec![profile(home.join(".bashrc"), shell.label())]),
         Shell::Zsh => {
             let base = env::var_os("ZDOTDIR")
+                .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| home.to_path_buf());
             Ok(vec![profile(base.join(".zshrc"), shell.label())])
         }
         Shell::Fish => {
             let base = env::var_os("XDG_CONFIG_HOME")
+                .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| home.join(".config"));
             Ok(vec![profile(
