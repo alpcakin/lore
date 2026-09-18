@@ -85,9 +85,11 @@ install -m 755 "$work/lore-$version-$triple/lore" "$BIN_DIR/lore"
 
 echo "lore: installed to $BIN_DIR/lore"
 
+# The last command decides the script's exit status, and a bin directory that
+# is not on PATH yet is advice, not a failure.
 case ":$PATH:" in
-    *":$BIN_DIR:"*) ;;
+    *":$BIN_DIR:"*) echo "lore: now run: lore setup" ;;
     *) echo "lore: add $BIN_DIR to your PATH, then run: lore setup" ;;
 esac
 
-command -v lore > /dev/null 2>&1 && echo "lore: now run: lore setup"
+exit 0

@@ -6,7 +6,7 @@
     "architecture": {
         "64bit": {
             "url": "https://github.com/alpcakin/lore/releases/download/v0.1.0/lore-v0.1.0-x86_64-pc-windows-msvc.zip",
-            "hash": "replace-with-the-sha256-from-SHA256SUMS",
+            "hash": "4813a7853f2798a89af7835f69e8ef2688f16a700a0155e3ed9e5f5e8e284116",
             "extract_dir": "lore-v0.1.0-x86_64-pc-windows-msvc"
         }
     },
