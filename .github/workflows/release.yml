@@ -151,6 +151,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: stable
-      - run: cargo publish --locked
+      # A fork, or a release cut before the token exists, should still get its
+      # archives. The job reports what it skipped instead of failing the run.
+      - name: Publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "::warning::CARGO_REGISTRY_TOKEN is not set, skipping the crates.io publish"
+            exit 0
+          fi
+          cargo publish --locked

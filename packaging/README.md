@@ -37,7 +37,9 @@ publish scope for `cmdlore`.
 3. The release workflow builds six targets and opens a draft release
 4. Check the draft, then publish it
 5. Fill the checksums from `SHA256SUMS` into the Scoop manifest and the Homebrew
-   formula, and push both to their own repositories
+   formula, and push both to their own repositories. Without
+   `CARGO_REGISTRY_TOKEN` the crates.io job skips with a warning rather than
+   failing, so the archives are released either way
 6. Submit to WinGet, which needs the release to be published first:
 
    ```
