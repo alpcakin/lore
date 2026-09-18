@@ -7,17 +7,17 @@ produce churn or merge conflicts.
 
 ## Layers
 
-Three layers are merged at load time. Later layers win over earlier ones:
+Two layers are merged at load time. The later one wins:
 
 1. `builtin` - shipped with the binary, curated by the project
-2. `project` - a `.lore.yml` found by walking up from the current directory
-3. `user`    - the user's own library
+2. `user`    - the user's own library
 
 Shadowing is by `id`. A user entry with the same `id` as a builtin replaces it
 entirely. Entries can also be hidden without being redefined (see `disabled`).
 
-Project layer files are untrusted until the user approves them once, and approval
-is invalidated when the file changes.
+A third `project` layer, a `.lore.yml` found by walking up from the current
+directory, is planned but not read by this version. It will sit between the two,
+and its files will be untrusted until the user approves them once.
 
 ## File structure
 

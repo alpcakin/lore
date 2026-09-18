@@ -26,6 +26,27 @@ Nothing here needs administrator rights. Everything installs under your home
 directory. Every route that installs for you checks the archive against the
 sha256 published with the release and refuses anything that does not match.
 
+**Shell installer (macOS and Linux)**
+
+```
+curl -fsSL https://raw.githubusercontent.com/alpcakin/lore/main/packaging/install.sh | sh
+```
+
+**Shell installer (Windows, PowerShell)**
+
+```
+irm https://raw.githubusercontent.com/alpcakin/lore/main/packaging/install.ps1 | iex
+```
+
+Both put the binary under your home directory and tell you if that directory
+is not on your PATH yet.
+
+**macOS and Linux (Homebrew)**
+
+```
+brew install alpcakin/tap/lore
+```
+
 **Windows (Scoop)**
 
 ```
@@ -37,22 +58,6 @@ scoop install lore
 
 ```
 winget install alpcakin.lore
-```
-
-**macOS and Linux (Homebrew)**
-
-```
-brew install alpcakin/tap/lore
-```
-
-**Shell installer**
-
-```
-curl -fsSL https://raw.githubusercontent.com/alpcakin/lore/main/packaging/install.sh | sh
-```
-
-```
-irm https://raw.githubusercontent.com/alpcakin/lore/main/packaging/install.ps1 | iex
 ```
 
 **Cargo**
@@ -187,10 +192,12 @@ what a portable install on a stick wants.
 The schema, including per shell command variants, placeholder syntax and how to
 hide builtins you do not want, is documented in [docs/schema.md](docs/schema.md).
 
-Around a hundred and fifty commands ship compiled into the binary, across git,
-docker, kubernetes, ssh, networking, security tooling and more. Entries that only
-make sense on a posix shell are hidden on Windows rather than offered and failing.
-Anything you do not want, you can hide:
+Around two hundred and forty commands ship compiled into the binary: the everyday
+git, docker, kubernetes, ssh, networking, file system, process, text, archive,
+node, python and rust commands, each described by what it is for rather than
+by its flags. Entries that only make sense on a posix shell are hidden on
+Windows rather than offered and failing. Anything you do not want, you can
+hide:
 
 ```yaml
 disabled:
@@ -205,6 +212,15 @@ cargo build --release
 
 Rust 1.88 or newer. `cargo fmt` and `cargo clippy --all-targets -- -D warnings`
 both have to pass, and CI runs them on Linux, macOS and Windows.
+
+## Contributing
+
+Bug reports and pull requests are welcome on
+[GitHub](https://github.com/alpcakin/lore). A new builtin belongs in the file
+under `assets/builtins` that matches its tool, described by what it is for, with
+the tags someone would search for and a `powershell` variant when the posix
+command does not exist there. Keep the interface ASCII only: a legacy Windows
+console shows anything else as mojibake, and a test enforces it.
 
 ## Licence
 

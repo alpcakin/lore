@@ -5,7 +5,7 @@ this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.1.0]
+## [0.1.0] - 2026-09-18
 
 First release.
 
@@ -27,9 +27,10 @@ First release.
 - Removal with `ctrl+x`, which deletes your own entry and hides a builtin
 - A command line equivalent for everything but the picker: `save`, `edit`, `rm`
   and `list`
-- A library of around a hundred and fifty commands compiled into the binary,
-  across git, docker, kubernetes, ssh, networking, security tooling, archives,
-  text processing, rust and node, with anything posix specific hidden on Windows
+- A library of around two hundred and forty everyday commands compiled into the
+  binary, across git, docker, kubernetes, ssh, networking, the file system,
+  processes, text processing, archives, node, python and rust, with anything
+  posix specific hidden on Windows
 - A user library in one YAML file that saves, edits and removals splice entries
   in and out of, leaving comments and ordering intact
 - Placeholders written `<name>` or `<name:default>`. One placeholder goes to the
