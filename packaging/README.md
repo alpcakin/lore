@@ -42,11 +42,14 @@ publish scope for `cmdlore`.
    both to their own repositories. Without
    `CARGO_REGISTRY_TOKEN` the crates.io job skips with a warning rather than
    failing, so the archives are released either way
-6. Submit to WinGet, which needs the release to be published first:
+Step 5 is manual because it writes to repositories this one has no business
+holding a token for.
 
-   ```
-   wingetcreate update alpcakin.lore --version <version> --urls <zip url> --submit
-   ```
+## Not yet done
 
-Steps 5 and 6 are manual because they write to repositories this one has no
-business holding a token for.
+WinGet. The README does not mention it, and it should not until a manifest has
+been accepted. When the time comes, the release has to be published first:
+
+```
+wingetcreate update alpcakin.lore --version <version> --urls <zip url> --submit
+```

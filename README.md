@@ -54,12 +54,6 @@ scoop bucket add alpcakin https://github.com/alpcakin/scoop-bucket
 scoop install lore
 ```
 
-**Windows (WinGet)**
-
-```
-winget install alpcakin.lore
-```
-
 **Cargo**
 
 ```
@@ -94,11 +88,7 @@ lore setup --key alt-r
 Write the key as `ctrl-<letter>` or `alt-<letter>`. Keys the terminal owns, such
 as `ctrl-c` and `ctrl-m`, are refused with the reason.
 
-To undo all of it:
-
-```
-lore uninstall
-```
+To take the keybinding out again, see [Uninstall](#uninstall).
 
 ## Using it
 
@@ -212,6 +202,46 @@ cargo build --release
 
 Rust 1.88 or newer. `cargo fmt` and `cargo clippy --all-targets -- -D warnings`
 both have to pass, and CI runs them on Linux, macOS and Windows.
+
+## Uninstall
+
+Three things were put on your machine: a line in your shell profile, the
+binary, and your library. Each is removed on its own.
+
+**1. The shell integration**
+
+```
+lore uninstall
+```
+
+This removes exactly the lines between the `# >>> lore >>>` and `# <<< lore <<<`
+markers from your profile and leaves everything else alone. The profile is
+backed up first, as `.bashrc.lore-backup` beside the original, and you can
+delete that backup once you are happy. If you set up more than one shell, run it once per shell with
+`--shell bash`, `--shell zsh`, `--shell fish` or `--shell powershell`. Do this
+before removing the binary, since it is the binary that knows where the
+profile is.
+
+**2. The binary**, depending on how you installed it:
+
+| Installed with       | Remove with                                                      |
+|----------------------|------------------------------------------------------------------|
+| Homebrew             | `brew uninstall lore`                                            |
+| Scoop                | `scoop uninstall lore`                                           |
+| Cargo                | `cargo uninstall cmdlore`                                        |
+| Shell installer, macOS and Linux | `rm ~/.local/bin/lore`                               |
+| Shell installer, Windows | `Remove-Item -Recurse $env:LOCALAPPDATA\Programs\lore`, then take that folder out of your user PATH in Settings if you want it gone too |
+| Prebuilt archive     | Delete `lore` from wherever you put it                           |
+
+**3. Your library and statistics**, only if you want them gone. They are the
+files listed under [Your library](#your-library). `commands.yaml` is the
+library you built; keep it if you might come back.
+
+| Platform | Remove                                                                   |
+|----------|--------------------------------------------------------------------------|
+| Linux    | `rm -r ~/.config/lore ~/.local/share/lore`                               |
+| macOS    | `rm -r ~/Library/Application\ Support/lore`                              |
+| Windows  | `Remove-Item -Recurse $env:APPDATA\lore`                                 |
 
 ## Contributing
 
