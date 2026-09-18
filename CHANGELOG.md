@@ -5,6 +5,29 @@ this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-18
+
+### Fixed
+
+- The picker never opened from zsh on macOS. zsh runs a widget's commands
+  with stdin on `/dev/null`, the terminal library fell back to `/dev/tty`,
+  and macOS refuses to poll that device, so the picker waited forever for the
+  cursor position it had asked for. The zsh snippet now hands the picker its
+  terminal by name, and on macOS the binary finds its own terminal when stdin
+  is not one, so bash, fish and any other caller are covered too. Upgrading
+  the binary is enough: the snippet is fetched from it on every shell start
+- The shell installer exited with status 1 after a successful install when the
+  bin directory was not yet on PATH
+- The crates.io job reported failure after a successful publish; it now checks
+  the index before deciding
+
+### Changed
+
+- The builtin library now leads with the everyday commands, two hundred and
+  forty of them across git, docker, kubernetes, ssh, networking, the file
+  system, processes, text, archives, node, python and rust, with the niche
+  security scanners dropped
+
 ## [0.1.0] - 2026-09-18
 
 First release.
@@ -38,5 +61,6 @@ First release.
 - `LORE_CONFIG_DIR` and `LORE_DATA_DIR` to relocate the library and the usage
   statistics, for a portable install
 
-[Unreleased]: https://github.com/alpcakin/lore/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/alpcakin/lore/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/alpcakin/lore/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/alpcakin/lore/releases/tag/v0.1.0
