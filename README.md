@@ -147,6 +147,15 @@ the picker draws under your prompt, which means asking the terminal where the
 cursor is, and that question goes out on stdout. A shell that captured stdout to
 read the result would swallow the question, and the panel would never open.
 
+The answer comes back on the terminal's input, so the picker needs that on
+stdin too. zsh runs a widget's commands with stdin closed off, so its snippet
+hands the picker the terminal by name, and on macOS the binary can find its own
+terminal when it has to.
+
+Upgrading the binary is enough for most changes, since the snippet is fetched
+from it on every shell start. When the release notes say to run `lore setup`
+again, the one line in the profile itself changed.
+
 ## Your library
 
 Your own commands live in one YAML file, meant to be read, edited and committed:

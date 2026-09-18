@@ -70,6 +70,8 @@ fn top_of(screen: &mut Screen) -> u16 {
 
 fn enter() -> Result<Screen> {
     install_panic_hook();
+    // Before the terminal library decides which descriptor to read from.
+    console::adopt_terminal_as_stdin();
     enable_raw_mode().context("failed to put the terminal into raw mode")?;
 
     let mut screen = Terminal::with_options(

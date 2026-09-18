@@ -34,3 +34,69 @@ pub fn report(message: &str) {
 
     eprint!("{message}");
 }
+
+/// Puts the controlling terminal on stdin when something else is there.
+///
+/// zsh runs a widget's commands with stdin on `/dev/null`. The terminal library
+/// then falls back to opening `/dev/tty`, and on macOS the kernel refuses to
+/// poll that device: the answer to the cursor position question is never seen,
+/// and the picker waits for it forever. The pseudo terminal's own path, such as
+/// `/dev/ttys003`, has no such problem, so it is found by session and dup'd
+/// onto stdin before the terminal library looks. Nothing here reads stdin for
+/// anything else.
+///
+/// Best effort: when the terminal cannot be found, the picker proceeds as it
+/// would have and whatever happens next is reported the usual way.
+#[cfg(target_os = "macos")]
+pub fn adopt_terminal_as_stdin() {
+    use std::os::fd::AsRawFd;
+
+    // SAFETY: isatty only inspects a descriptor number.
+    if unsafe { libc::isatty(libc::STDIN_FILENO) } == 1 {
+        return;
+    }
+
+    let Some(terminal) = controlling_terminal() else {
+        return;
+    };
+
+    // SAFETY: both descriptors are open and owned by this process; dup2 leaves
+    // `terminal` untouched, and the copy on stdin outlives it.
+    unsafe {
+        libc::dup2(terminal.as_raw_fd(), libc::STDIN_FILENO);
+    }
+}
+
+/// The pseudo terminal this process's session is attached to, if any.
+///
+/// Only `ttys*` devices are tried. Anything else under `/dev/tty*` is a
+/// serial or Bluetooth port, and opening one of those blocks waiting for a
+/// carrier that will never come.
+#[cfg(target_os = "macos")]
+fn controlling_terminal() -> Option<File> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    // SAFETY: getsid(0) asks about the calling process and cannot fail for it.
+    let session = unsafe { libc::getsid(0) };
+
+    std::fs::read_dir("/dev")
+        .ok()?
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("ttys"))
+        .find_map(|entry| {
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(libc::O_NOCTTY)
+                .open(entry.path())
+                .ok()?;
+
+            // SAFETY: the descriptor is open and owned by `file`.
+            let owner = unsafe { libc::tcgetsid(file.as_raw_fd()) };
+            (owner == session).then_some(file)
+        })
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn adopt_terminal_as_stdin() {}

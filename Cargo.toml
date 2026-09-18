@@ -1,6 +1,6 @@
 [package]
 name = "cmdlore"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
 description = "A command library that lives in your shell"
@@ -36,6 +36,10 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_yaml_ng = "0.10.0"
 thiserror = "2.0.20"
+
+# Only to find the controlling terminal when stdin is not one; see console.rs.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2.189"
 
 [profile.release]
 lto = true

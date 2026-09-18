@@ -588,6 +588,23 @@ mod tests {
 
     /// The result file is the caller's to clean up, and it is one more than the
     /// history file, so both have to be named on the way out.
+    /// zle runs a widget's commands with stdin on /dev/null. The picker would
+    /// fall back to /dev/tty, which macOS refuses to poll, and wait forever
+    /// for a cursor position that never arrives.
+    #[test]
+    fn zsh_hands_the_picker_its_own_terminal_as_stdin() {
+        let invocation = snippet(Shell::Zsh)
+            .lines()
+            .find(|line| line.contains("lore pick"))
+            .expect("the snippet runs the picker")
+            .to_string();
+
+        assert!(
+            invocation.contains(r#"< "$TTY""#),
+            "zsh leaves stdin on /dev/null: {invocation}"
+        );
+    }
+
     #[test]
     fn every_snippet_removes_both_of_its_temporary_files() {
         for shell in ALL {
