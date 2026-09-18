@@ -12,7 +12,9 @@ documentation = "https://docs.rs/cmdlore"
 readme = "README.md"
 keywords = ["cli", "shell", "tui", "history", "productivity"]
 categories = ["command-line-utilities", "development-tools"]
-exclude = ["/.github", "/docs/demo.tape", "/packaging"]
+# The gif is half a megabyte nobody installing from crates.io needs. crates.io
+# rewrites the README's relative image link to the repository, so it still shows.
+exclude = ["/.github", "/docs/demo.gif", "/docs/demo.tape", "/packaging"]
 
 # The crate is published as `cmdlore` because `lore` and `lore-cli` are both
 # taken. Everything a user ever types stays `lore`.
