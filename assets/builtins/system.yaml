@@ -2,77 +2,94 @@ version: 1
 
 commands:
 
-  - id: sys.ports.listening
+  - id: sys.files.list
     cmd:
-      posix: sudo ss -tulpn
-      powershell: 'Get-NetTCPConnection -State Listen | Select-Object LocalAddress, LocalPort, OwningProcess'
-    desc: See every port something is listening on, and what is listening
-    tags: [system, ports, network, listening, sockets]
+      posix: ls -lah
+      powershell: Get-ChildItem -Force
+    desc: List everything here, hidden files and sizes included
+    tags: [files, ls, list, hidden, dir]
 
-  - id: sys.port.owner
+  - id: sys.files.mkdir
     cmd:
-      posix: sudo lsof -nP -iTCP:<port> -sTCP:LISTEN
-      powershell: 'Get-Process -Id (Get-NetTCPConnection -LocalPort <port>).OwningProcess'
-    desc: Find out what is holding the port you wanted
-    tags: [system, port, process, conflict, address-in-use]
-    params:
-      port:
-        desc: Port number
-
-  - id: sys.port.free
-    cmd:
-      posix: sudo kill -9 $(sudo lsof -t -iTCP:<port> -sTCP:LISTEN)
-      powershell: 'Stop-Process -Id (Get-NetTCPConnection -LocalPort <port>).OwningProcess -Force'
-    desc: Kill whatever is holding a port
-    tags: [system, port, kill, process, conflict]
-    danger: true
-    params:
-      port:
-        desc: Port to free
-
-  - id: sys.process.by-name
-    cmd:
-      posix: pgrep -af <name>
-      powershell: 'Get-Process <name> | Format-Table Id, ProcessName, Path -AutoSize'
-    desc: Find a running process and the arguments it was started with
-    tags: [system, process, search, ps, pid]
-    params:
-      name:
-        desc: Part of the process name
-
-  - id: sys.process.top-memory
-    cmd:
-      posix: ps aux --sort=-%mem | head -n <count:15>
-      powershell: 'Get-Process | Sort-Object WS -Descending | Select-Object -First <count:15> Id, ProcessName, WS'
-    desc: Find what is eating the memory on this machine
-    tags: [system, process, memory, top, performance]
-    params:
-      count:
-        desc: How many processes to show
-
-  - id: sys.disk.free
-    cmd:
-      posix: df -h
-      powershell: 'Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free'
-    desc: Check how much room is left on each drive
-    tags: [system, disk, free, space, storage]
-
-  - id: sys.disk.biggest-directories
-    cmd:
-      posix: du -h --max-depth=1 <path:.> | sort -h | tail -n 20
-      powershell: 'Get-ChildItem <path:.> -Directory | ForEach-Object { [PSCustomObject]@{ Name = $_.Name; GB = [math]::Round((Get-ChildItem $_ -Recurse -File | Measure-Object Length -Sum).Sum / 1GB, 2) } } | Sort-Object GB -Descending'
-    desc: Find where the disk actually went
-    tags: [system, disk, size, directories, cleanup]
+      posix: mkdir -p <path>
+      powershell: New-Item -ItemType Directory -Force <path>
+    desc: Create a directory and any parents it needs
+    tags: [files, mkdir, directory, create]
     params:
       path:
-        desc: Directory to break down
+        desc: Directory to create
+
+  - id: sys.files.copy
+    cmd:
+      posix: cp -r <source> <destination>
+      powershell: Copy-Item -Recurse <source> <destination>
+    desc: Copy a file or a whole directory
+    tags: [files, cp, copy, directory]
+    params:
+      source:
+        desc: What to copy
+      destination:
+        desc: Where to put it
+
+  - id: sys.files.move
+    cmd:
+      posix: mv <source> <destination>
+      powershell: Move-Item <source> <destination>
+    desc: Move or rename a file or directory
+    tags: [files, mv, move, rename]
+    params:
+      source:
+        desc: What to move
+      destination:
+        desc: New path or name
+
+  - id: sys.files.remove
+    cmd:
+      posix: rm -rf <path>
+      powershell: Remove-Item -Recurse -Force <path>
+    desc: Delete a directory and everything in it, without asking
+    tags: [files, rm, remove, delete, directory]
+    danger: true
+    params:
+      path:
+        desc: Directory or file to delete
+
+  - id: sys.files.symlink
+    cmd:
+      posix: ln -s <target> <link>
+      powershell: New-Item -ItemType SymbolicLink -Path <link> -Target <target>
+    desc: Make a link that points at another file or directory
+    tags: [files, ln, symlink, link]
+    params:
+      target:
+        desc: Existing file or directory to point at
+      link:
+        desc: Path of the link to create
+
+  - id: sys.files.executable
+    cmd:
+      posix: chmod +x <path>
+    desc: Make a script runnable
+    tags: [files, chmod, executable, permissions, script]
+    params:
+      path:
+        desc: Script to mark
+
+  - id: sys.files.own
+    cmd:
+      posix: sudo chown -R $USER <path>
+    desc: Take ownership of a tree that root or another user created
+    tags: [files, chown, owner, permissions, sudo]
+    params:
+      path:
+        desc: Directory to take over
 
   - id: sys.find.by-name
     cmd:
       posix: find <path:.> -type f -name "<pattern>"
       powershell: 'Get-ChildItem <path:.> -Recurse -File -Filter "<pattern>"'
     desc: Find a file when you only remember part of its name
-    tags: [system, find, search, files, name]
+    tags: [files, find, search, name]
     params:
       path:
         desc: Where to start looking
@@ -84,7 +101,7 @@ commands:
       posix: find <path:.> -type f -size +<size:100M> -exec ls -lh {} +
       powershell: 'Get-ChildItem <path:.> -Recurse -File | Where-Object Length -gt <bytes:100MB> | Sort-Object Length -Descending'
     desc: Track down the files filling a directory up
-    tags: [system, find, large, size, disk, cleanup]
+    tags: [files, find, size, large, disk]
     params:
       path:
         desc: Where to start looking
@@ -98,77 +115,205 @@ commands:
       posix: find <path:.> -type f -mtime -<days:1> -not -path "*/.git/*"
       powershell: 'Get-ChildItem <path:.> -Recurse -File | Where-Object LastWriteTime -gt (Get-Date).AddDays(-<days:1>)'
     desc: Work out what changed on disk while you were away
-    tags: [system, find, modified, recent, files]
+    tags: [files, find, modified, recent, changed]
     params:
       path:
         desc: Where to start looking
       days:
         desc: How far back to go
 
+  - id: sys.disk.free
+    cmd:
+      posix: df -h
+      powershell: 'Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free'
+    desc: Check how much room is left on each drive
+    tags: [disk, space, free, df, storage]
+
+  - id: sys.disk.usage
+    cmd:
+      posix: du -sh <path:.>
+      powershell: '"{0:N2} GB" -f ((Get-ChildItem <path:.> -Recurse -File | Measure-Object Length -Sum).Sum / 1GB)'
+    desc: See how much space a directory takes in total
+    tags: [disk, space, du, size, directory]
+    params:
+      path:
+        desc: Directory to measure
+
+  - id: sys.disk.biggest-directories
+    cmd:
+      posix: du -sh <path:.>/* | sort -h | tail -n 20
+      powershell: 'Get-ChildItem <path:.> -Directory | ForEach-Object { [PSCustomObject]@{ Name = $_.Name; GB = [math]::Round((Get-ChildItem $_ -Recurse -File | Measure-Object Length -Sum).Sum / 1GB, 2) } } | Sort-Object GB -Descending'
+    desc: Find where the disk actually went
+    tags: [disk, space, du, size, directories, largest]
+    params:
+      path:
+        desc: Directory to break down
+
+  - id: sys.process.list
+    cmd:
+      posix: ps aux
+      powershell: Get-Process
+    desc: List every running process
+    tags: [process, ps, list, running]
+
+  - id: sys.process.by-name
+    cmd:
+      posix: pgrep -afl <name>
+      powershell: 'Get-Process *<name>* | Format-Table Id, ProcessName, Path -AutoSize'
+    desc: Find a running process and the arguments it was started with
+    tags: [process, ps, pgrep, find, pid]
+    params:
+      name:
+        desc: Part of the process name
+
+  - id: sys.process.top-memory
+    cmd:
+      posix: ps aux | sort -rk 4 | head -n <count:15>
+      powershell: 'Get-Process | Sort-Object WS -Descending | Select-Object -First <count:15> Id, ProcessName, WS'
+    desc: Find what is eating the memory on this machine
+    tags: [process, memory, ram, top, ps]
+    params:
+      count:
+        desc: How many processes to show
+
+  - id: sys.process.top-cpu
+    cmd:
+      posix: ps aux | sort -rk 3 | head -n <count:15>
+      powershell: 'Get-Process | Sort-Object CPU -Descending | Select-Object -First <count:15> Id, ProcessName, CPU'
+    desc: Find what is eating the cpu on this machine
+    tags: [process, cpu, top, ps, load]
+    params:
+      count:
+        desc: How many processes to show
+
+  - id: sys.process.kill
+    cmd:
+      posix: kill <pid>
+      powershell: Stop-Process -Id <pid>
+    desc: Ask a process to stop, by its id
+    tags: [process, kill, stop, pid]
+    params:
+      pid:
+        desc: Process id
+
+  - id: sys.process.kill-by-name
+    cmd:
+      posix: pkill -f <name>
+      powershell: Stop-Process -Name <name> -Force
+    desc: Stop every process whose name matches
+    tags: [process, kill, pkill, stop, name]
+    danger: true
+    params:
+      name:
+        desc: Process name to match
+
+  - id: sys.ports.listening
+    cmd:
+      posix: sudo lsof -nP -iTCP -sTCP:LISTEN
+      powershell: 'Get-NetTCPConnection -State Listen | Select-Object LocalAddress, LocalPort, OwningProcess'
+    desc: See every port something is listening on, and what is listening
+    tags: [network, ports, listening, lsof, open]
+
+  - id: sys.port.owner
+    cmd:
+      posix: sudo lsof -nP -iTCP:<port> -sTCP:LISTEN
+      powershell: 'Get-Process -Id (Get-NetTCPConnection -LocalPort <port>).OwningProcess'
+    desc: Find out what is holding the port you wanted
+    tags: [network, port, lsof, process, in-use]
+    params:
+      port:
+        desc: Port number
+
+  - id: sys.port.free
+    cmd:
+      posix: sudo kill -9 $(sudo lsof -t -iTCP:<port> -sTCP:LISTEN)
+      powershell: 'Stop-Process -Id (Get-NetTCPConnection -LocalPort <port>).OwningProcess -Force'
+    desc: Kill whatever is holding a port
+    tags: [network, port, kill, free, in-use]
+    danger: true
+    params:
+      port:
+        desc: Port to free
+
   - id: sys.tail.follow
     cmd:
       posix: tail -f -n <lines:100> <path>
       powershell: 'Get-Content <path> -Wait -Tail <lines:100>'
     desc: Watch a log file as it is written
-    tags: [system, tail, follow, log, watch]
+    tags: [logs, tail, follow, watch, file]
     params:
       path:
         desc: File to follow
       lines:
         desc: How much history to show first
 
-  - id: sys.watch.repeat
-    cmd:
-      posix: watch -n <seconds:2> <command>
-      powershell: 'while ($true) { Clear-Host; <command>; Start-Sleep -Seconds <seconds:2> }'
-    desc: Run something on a loop until the number you are waiting for changes
-    tags: [system, watch, repeat, poll, monitor]
-    params:
-      seconds:
-        desc: Delay between runs
-      command:
-        desc: Command to repeat
-
   - id: sys.env.sorted
     cmd:
       posix: env | sort
       powershell: 'Get-ChildItem Env: | Sort-Object Name'
     desc: Read the environment this shell is actually running with
-    tags: [system, environment, variables, debug]
+    tags: [environment, env, variables, shell]
 
   - id: sys.path.readable
     cmd:
       posix: echo "$PATH" | tr ':' '\n'
       powershell: '$env:PATH -split ";"'
     desc: Read PATH one entry per line instead of as one wall of text
-    tags: [system, path, environment, debug]
+    tags: [environment, path, shell]
 
-  - id: sys.which.all
+  - id: sys.which
     cmd:
-      posix: type -a <command>
+      posix: which -a <command>
       powershell: 'Get-Command <command> -All'
     desc: Find out which copy of a tool you are getting, and what else is shadowed
-    tags: [system, which, path, shadow, debug]
+    tags: [which, command, path, binary, where]
     params:
       command:
         desc: Command to resolve
+
+  - id: sys.history.search
+    cmd:
+      posix: history | grep <text>
+      powershell: 'Get-History | Select-String <text>'
+    desc: Find a command you ran earlier in this shell
+    tags: [history, search, grep, shell]
+    params:
+      text:
+        desc: Part of the command you remember
 
   - id: sys.hash.file
     cmd:
       posix: shasum -a 256 <path>
       powershell: 'Get-FileHash <path> -Algorithm SHA256'
     desc: Check a download against the checksum it was published with
-    tags: [system, hash, sha256, checksum, verify]
+    tags: [hash, sha256, checksum, verify, download]
     params:
       path:
         desc: File to hash
+
+  - id: sys.info
+    cmd:
+      posix: uname -a
+      powershell: 'Get-ComputerInfo | Select-Object OsName, OsVersion, OsArchitecture, CsName'
+    desc: Find out which operating system and architecture this is
+    tags: [system, os, version, uname, architecture, info]
 
   - id: sys.service.status
     cmd:
       posix: systemctl status <service>
       powershell: 'Get-Service <service> | Format-List Name, Status, StartType'
     desc: Find out whether a service is running and why it stopped
-    tags: [system, service, systemd, status, daemon]
+    tags: [service, systemd, systemctl, status, daemon]
+    params:
+      service:
+        desc: Service name
+
+  - id: sys.service.restart
+    cmd:
+      posix: sudo systemctl restart <service>
+      powershell: Restart-Service <service>
+    desc: Restart a service
+    tags: [service, systemd, systemctl, restart, daemon]
     params:
       service:
         desc: Service name
@@ -177,19 +322,9 @@ commands:
     cmd:
       posix: journalctl -u <service> -n <lines:200> --no-pager
     desc: Read what a service logged before it fell over
-    tags: [system, journalctl, logs, systemd, service]
+    tags: [service, systemd, journalctl, logs, daemon]
     params:
       service:
         desc: Service name
       lines:
         desc: How many lines to show
-
-  - id: sys.permissions.normalise
-    cmd:
-      posix: 'find <path> -type d -exec chmod 755 {} + -o -type f -exec chmod 644 {} +'
-    desc: Put a tree back to the usual directory and file permissions
-    tags: [system, chmod, permissions, files, fix]
-    danger: true
-    params:
-      path:
-        desc: Directory to walk

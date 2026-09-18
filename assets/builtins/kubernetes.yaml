@@ -2,10 +2,31 @@ version: 1
 
 commands:
 
+  - id: k8s.pods
+    cmd: kubectl get pods -n <namespace:default>
+    desc: List the pods in a namespace
+    tags: [kubernetes, kubectl, pods, list]
+    params:
+      namespace:
+        desc: Namespace to look in
+
+  - id: k8s.pods.all
+    cmd: kubectl get pods -A
+    desc: List every pod in the cluster
+    tags: [kubernetes, kubectl, pods, all, cluster]
+
   - id: k8s.pods.wide
     cmd: kubectl get pods -o wide -n <namespace:default>
     desc: See which node every pod landed on and what address it has
-    tags: [kubernetes, kubectl, pods, nodes, network]
+    tags: [kubernetes, kubectl, pods, nodes, ip]
+    params:
+      namespace:
+        desc: Namespace to look in
+
+  - id: k8s.pods.watch
+    cmd: kubectl get pods -n <namespace:default> -w
+    desc: Watch pods come and go while a deploy rolls out
+    tags: [kubernetes, kubectl, pods, watch]
     params:
       namespace:
         desc: Namespace to look in
@@ -13,17 +34,66 @@ commands:
   - id: k8s.pods.unhealthy
     cmd: kubectl get pods -A --field-selector=status.phase!=Running
     desc: Find every pod in the cluster that is not running
-    tags: [kubernetes, kubectl, pods, failing, triage]
+    tags: [kubernetes, kubectl, pods, failing, pending, crash]
 
-  - id: k8s.pods.by-restarts
-    cmd: kubectl get pods -A --sort-by=.status.containerStatuses[0].restartCount
-    desc: Find the pods that keep crashing and coming back
-    tags: [kubernetes, kubectl, pods, restarts, crashloop]
+  - id: k8s.get.all
+    cmd: kubectl get all -n <namespace:default>
+    desc: See everything running in a namespace at a glance
+    tags: [kubernetes, kubectl, get, all, overview]
+    params:
+      namespace:
+        desc: Namespace to look in
+
+  - id: k8s.get.yaml
+    cmd: kubectl get <resource> -n <namespace:default> -o yaml
+    desc: Read the full definition of one resource as the cluster holds it
+    tags: [kubernetes, kubectl, get, yaml, manifest]
+    params:
+      resource:
+        desc: Kind and name, such as deployment/api or svc/api
+      namespace:
+        desc: Namespace it is in
+
+  - id: k8s.services
+    cmd: kubectl get svc -n <namespace:default>
+    desc: List the services and the ports they expose
+    tags: [kubernetes, kubectl, services, svc, ports]
+    params:
+      namespace:
+        desc: Namespace to look in
+
+  - id: k8s.deployments
+    cmd: kubectl get deployments -n <namespace:default>
+    desc: List the deployments and how many replicas are ready
+    tags: [kubernetes, kubectl, deployments, replicas]
+    params:
+      namespace:
+        desc: Namespace to look in
+
+  - id: k8s.nodes
+    cmd: kubectl get nodes -o wide
+    desc: List the nodes with their versions and addresses
+    tags: [kubernetes, kubectl, nodes, cluster]
+
+  - id: k8s.namespaces
+    cmd: kubectl get namespaces
+    desc: List the namespaces in the cluster
+    tags: [kubernetes, kubectl, namespaces, list]
+
+  - id: k8s.describe.pod
+    cmd: kubectl describe pod <pod> -n <namespace:default>
+    desc: Find out why a pod will not schedule or start
+    tags: [kubernetes, kubectl, describe, pod, events, debug]
+    params:
+      pod:
+        desc: Pod name
+      namespace:
+        desc: Namespace the pod is in
 
   - id: k8s.logs.follow
     cmd: kubectl logs -f <pod> -n <namespace:default>
     desc: Watch what a pod is printing right now
-    tags: [kubernetes, kubectl, logs, follow, debug]
+    tags: [kubernetes, kubectl, logs, follow, tail]
     params:
       pod:
         desc: Pod name
@@ -33,7 +103,7 @@ commands:
   - id: k8s.logs.previous
     cmd: kubectl logs --previous <pod> -n <namespace:default>
     desc: Read why the last container died, after it has been replaced
-    tags: [kubernetes, kubectl, logs, crash, previous]
+    tags: [kubernetes, kubectl, logs, crash, previous, restart]
     params:
       pod:
         desc: Pod name
@@ -41,21 +111,19 @@ commands:
         desc: Namespace the pod is in
 
   - id: k8s.logs.by-label
-    cmd: kubectl logs -f -l <selector> --max-log-requests <limit:10> -n <namespace:default>
+    cmd: kubectl logs -f -l <selector> -n <namespace:default>
     desc: Follow every replica of a service at once
-    tags: [kubernetes, kubectl, logs, label, selector]
+    tags: [kubernetes, kubectl, logs, label, selector, replicas]
     params:
       selector:
         desc: Label selector, such as app=api
-      limit:
-        desc: How many pods to stream at once
       namespace:
         desc: Namespace to look in
 
   - id: k8s.exec.shell
     cmd: kubectl exec -it <pod> -n <namespace:default> -- <shell:sh>
     desc: Get a prompt inside a running pod
-    tags: [kubernetes, kubectl, exec, shell, debug]
+    tags: [kubernetes, kubectl, exec, shell, bash]
     params:
       pod:
         desc: Pod name
@@ -64,42 +132,68 @@ commands:
       shell:
         desc: Shell to run
 
-  - id: k8s.describe.pod
-    cmd: kubectl describe pod <pod> -n <namespace:default>
-    desc: Find out why a pod will not schedule or start
-    tags: [kubernetes, kubectl, describe, events, pending]
+  - id: k8s.apply
+    cmd: kubectl apply -f <path>
+    desc: Create or update whatever a manifest describes
+    tags: [kubernetes, kubectl, apply, manifest, deploy]
+    params:
+      path:
+        desc: Manifest file or directory
+
+  - id: k8s.apply.dry-run
+    cmd: kubectl apply -f <path> --dry-run=server
+    desc: Find out what a manifest would do before it does it
+    tags: [kubernetes, kubectl, apply, dry-run, validate]
+    params:
+      path:
+        desc: Manifest file or directory
+
+  - id: k8s.delete
+    cmd: kubectl delete -f <path>
+    desc: Remove everything a manifest describes
+    tags: [kubernetes, kubectl, delete, manifest]
+    danger: true
+    params:
+      path:
+        desc: Manifest file or directory
+
+  - id: k8s.delete.pod
+    cmd: kubectl delete pod <pod> -n <namespace:default>
+    desc: Delete a pod and let its controller start a fresh one
+    tags: [kubernetes, kubectl, delete, pod, restart]
+    danger: true
     params:
       pod:
         desc: Pod name
       namespace:
         desc: Namespace the pod is in
 
-  - id: k8s.events.recent
-    cmd: kubectl get events --sort-by=.lastTimestamp -n <namespace:default>
-    desc: Read what the cluster has been doing, newest last
-    tags: [kubernetes, kubectl, events, timeline, triage]
+  - id: k8s.scale
+    cmd: kubectl scale deployment/<deployment> --replicas=<replicas> -n <namespace:default>
+    desc: Change how many replicas a deployment runs
+    tags: [kubernetes, kubectl, scale, replicas, deployment]
     params:
+      deployment:
+        desc: Deployment name
+      replicas:
+        desc: How many pods to run
       namespace:
-        desc: Namespace to look in
-
-  - id: k8s.port-forward
-    cmd: kubectl port-forward <resource> <local>:<remote> -n <namespace:default>
-    desc: Reach a service running in the cluster from this machine
-    tags: [kubernetes, kubectl, port-forward, tunnel, local]
-    params:
-      resource:
-        desc: Target, such as svc/api or pod/api-0
-      local:
-        desc: Port to open here
-      remote:
-        desc: Port to reach in the cluster
-      namespace:
-        desc: Namespace the resource is in
+        desc: Namespace it is in
 
   - id: k8s.rollout.status
     cmd: kubectl rollout status deployment/<deployment> -n <namespace:default>
     desc: Wait for a deploy and find out whether it actually finished
-    tags: [kubernetes, kubectl, rollout, deploy, wait]
+    tags: [kubernetes, kubectl, rollout, status, deploy]
+    params:
+      deployment:
+        desc: Deployment name
+      namespace:
+        desc: Namespace it is in
+
+  - id: k8s.rollout.restart
+    cmd: kubectl rollout restart deployment/<deployment> -n <namespace:default>
+    desc: Cycle every pod of a deployment without changing anything
+    tags: [kubernetes, kubectl, rollout, restart, deploy]
     params:
       deployment:
         desc: Deployment name
@@ -117,61 +211,58 @@ commands:
       namespace:
         desc: Namespace it is in
 
-  - id: k8s.rollout.restart
-    cmd: kubectl rollout restart deployment/<deployment> -n <namespace:default>
-    desc: Cycle every pod of a deployment without changing anything
-    tags: [kubernetes, kubectl, rollout, restart, deploy]
+  - id: k8s.port-forward
+    cmd: kubectl port-forward <resource> <local>:<remote> -n <namespace:default>
+    desc: Reach a service running in the cluster from this machine
+    tags: [kubernetes, kubectl, port-forward, tunnel, localhost]
     params:
-      deployment:
-        desc: Deployment name
+      resource:
+        desc: Target, such as svc/api or pod/api-0
+      local:
+        desc: Port to open here
+      remote:
+        desc: Port to reach in the cluster
       namespace:
-        desc: Namespace it is in
+        desc: Namespace the resource is in
+
+  - id: k8s.events.recent
+    cmd: kubectl get events --sort-by=.lastTimestamp -n <namespace:default>
+    desc: Read what the cluster has been doing, newest last
+    tags: [kubernetes, kubectl, events, debug]
+    params:
+      namespace:
+        desc: Namespace to look in
 
   - id: k8s.top.pods
-    cmd: kubectl top pods -A --sort-by=memory
-    desc: Find which pod is using the most memory in the cluster
-    tags: [kubernetes, kubectl, top, memory, resources]
-
-  - id: k8s.secret.decode
-    cmd: 'kubectl get secret <secret> -n <namespace:default> -o jsonpath="{.data.<key>}"'
-    desc: Read one value out of a secret
-    tags: [kubernetes, kubectl, secret, decode, jsonpath]
+    cmd: kubectl top pods -n <namespace:default>
+    desc: See how much cpu and memory each pod is using
+    tags: [kubernetes, kubectl, top, cpu, memory]
     params:
-      secret:
-        desc: Secret name
       namespace:
-        desc: Namespace it is in
-      key:
-        desc: Key inside the secret, still base64 encoded
+        desc: Namespace to look in
 
-  - id: k8s.context.switch
-    cmd: kubectl config use-context <context>
-    desc: Point kubectl at a different cluster
-    tags: [kubernetes, kubectl, context, cluster, config]
-    params:
-      context:
-        desc: Context name from kubeconfig
+  - id: k8s.top.nodes
+    cmd: kubectl top nodes
+    desc: See how loaded each node is
+    tags: [kubernetes, kubectl, top, nodes, cpu, memory]
 
   - id: k8s.context.list
     cmd: kubectl config get-contexts
     desc: Check which cluster you are about to run against
-    tags: [kubernetes, kubectl, context, config, safety]
+    tags: [kubernetes, kubectl, context, cluster, config]
 
-  - id: k8s.apply.dry-run
-    cmd: kubectl apply -f <path> --dry-run=server
-    desc: Find out what a manifest would do before it does it
-    tags: [kubernetes, kubectl, apply, dry-run, preview]
+  - id: k8s.context.switch
+    cmd: kubectl config use-context <context>
+    desc: Point kubectl at a different cluster
+    tags: [kubernetes, kubectl, context, cluster, switch]
     params:
-      path:
-        desc: Manifest file or directory
+      context:
+        desc: Context name from kubeconfig
 
-  - id: k8s.delete.stuck-pod
-    cmd: kubectl delete pod <pod> -n <namespace:default> --grace-period=0 --force
-    desc: Remove a pod that will not terminate
-    tags: [kubernetes, kubectl, delete, force, stuck]
-    danger: true
+  - id: k8s.namespace.default
+    cmd: kubectl config set-context --current --namespace=<namespace>
+    desc: Set the namespace every command uses, instead of typing -n each time
+    tags: [kubernetes, kubectl, namespace, context, default]
     params:
-      pod:
-        desc: Pod name
       namespace:
-        desc: Namespace it is in
+        desc: Namespace to work in from now on

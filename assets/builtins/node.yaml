@@ -2,72 +2,106 @@ version: 1
 
 commands:
 
-  - id: node.deps.why
-    cmd: npm why <package>
-    desc: Find out which dependency is dragging a package in
-    tags: [node, npm, dependencies, transitive, why]
-    params:
-      package:
-        desc: Package to trace back
+  - id: node.init
+    cmd: npm init -y
+    desc: Start a new package with a default package.json
+    tags: [node, npm, init, new, package.json]
 
-  - id: node.deps.outdated
-    cmd: npm outdated
-    desc: See which dependencies have moved on without you
-    tags: [node, npm, outdated, dependencies, versions]
-
-  - id: node.deps.audit-production
-    cmd: npm audit --omit=dev
-    desc: Check the dependencies that actually ship, not the build tooling
-    tags: [node, npm, audit, security, vulnerabilities]
+  - id: node.install
+    cmd: npm install
+    desc: Install the dependencies this project declares
+    tags: [node, npm, install, dependencies]
 
   - id: node.install.clean
     cmd: npm ci
     desc: Install exactly what the lock file says, from an empty tree
-    tags: [node, npm, install, lockfile, reproducible, ci]
+    tags: [node, npm, ci, install, lockfile, reproducible]
+
+  - id: node.install.package
+    cmd: npm install <package>
+    desc: Add a package to the project
+    tags: [node, npm, install, add, package]
+    params:
+      package:
+        desc: Package name, with a version if you need one
+
+  - id: node.install.dev
+    cmd: npm install -D <package>
+    desc: Add a package that is only needed while developing
+    tags: [node, npm, install, dev, devDependencies]
+    params:
+      package:
+        desc: Package name, with a version if you need one
+
+  - id: node.uninstall
+    cmd: npm uninstall <package>
+    desc: Remove a package from the project
+    tags: [node, npm, uninstall, remove, package]
+    params:
+      package:
+        desc: Package to remove
+
+  - id: node.run.script
+    cmd: npm run <script>
+    desc: Run one of the scripts in package.json
+    tags: [node, npm, run, script]
+    params:
+      script:
+        desc: Script name, such as build or test
+
+  - id: node.scripts.list
+    cmd: npm run
+    desc: Find out what this project can be told to do
+    tags: [node, npm, scripts, list, package.json]
+
+  - id: node.test
+    cmd: npm test
+    desc: Run the project's tests
+    tags: [node, npm, test]
 
   - id: node.run.without-installing
     cmd: npx --yes <package> <arguments>
     desc: Run a tool once without adding it to the project
-    tags: [node, npx, run, temporary, tool]
+    tags: [node, npx, run, tool, once]
     params:
       package:
         desc: Package providing the command
       arguments:
         desc: Arguments to pass to it
 
-  - id: node.scripts.list
-    cmd:
-      posix: jq -r '.scripts | keys[]' package.json
-      powershell: '(Get-Content package.json -Raw | ConvertFrom-Json).scripts | Get-Member -MemberType NoteProperty | Select-Object Name'
-    desc: Find out what this project can actually be told to do
-    tags: [node, npm, scripts, package-json, discover]
+  - id: node.deps.outdated
+    cmd: npm outdated
+    desc: See which dependencies have moved on without you
+    tags: [node, npm, outdated, dependencies, update]
 
-  - id: node.debug.inspect
-    cmd: node --inspect-brk <path>
-    desc: Start a script paused so a debugger can attach before anything runs
-    tags: [node, debug, inspect, breakpoint, devtools]
-    params:
-      path:
-        desc: Script to run
+  - id: node.deps.update
+    cmd: npm update
+    desc: Update the dependencies within the ranges package.json allows
+    tags: [node, npm, update, dependencies, upgrade]
 
-  - id: node.version.use
-    cmd: nvm use <version>
-    desc: Switch this shell to the version a project expects
-    tags: [node, nvm, version, switch]
+  - id: node.deps.why
+    cmd: npm why <package>
+    desc: Find out which dependency is dragging a package in
+    tags: [node, npm, why, dependencies, tree]
     params:
-      version:
-        desc: Version or alias, such as 20 or lts/iron
+      package:
+        desc: Package to trace back
+
+  - id: node.deps.audit
+    cmd: npm audit fix
+    desc: Fix the dependencies with known vulnerabilities where a compatible update exists
+    tags: [node, npm, audit, vulnerabilities, security]
 
   - id: node.cache.clear
     cmd: npm cache clean --force
     desc: Throw the download cache away when installs keep failing
-    tags: [node, npm, cache, clean, install]
+    tags: [node, npm, cache, clean]
     danger: true
 
-  - id: node.size.bundle
-    cmd: npx --yes source-map-explorer <path>
-    desc: Find out what is making a bundle so large
-    tags: [node, bundle, size, source-map, performance]
+  - id: node.version.use
+    cmd: nvm use <version>
+    desc: Switch this shell to the node version a project expects
+    tags: [node, nvm, version, switch]
     params:
-      path:
-        desc: Built bundle file
+      version:
+        desc: Version or alias, such as 20 or lts/iron

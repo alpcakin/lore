@@ -2,45 +2,150 @@ version: 1
 
 commands:
 
-  - id: docker.ps.readable
-    cmd: 'docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"'
-    desc: List the running containers without the columns you never read
-    tags: [docker, ps, containers, format]
+  - id: docker.ps
+    cmd: docker ps
+    desc: List the running containers
+    tags: [docker, ps, containers, list]
 
-  - id: docker.ps.all-with-size
-    cmd: 'docker ps -a --size --format "table {{.Names}}\t{{.Status}}\t{{.Size}}"'
-    desc: Find the stopped containers that are still taking up disk
-    tags: [docker, ps, stopped, size, disk]
+  - id: docker.ps.all
+    cmd: docker ps -a
+    desc: List every container, stopped ones included
+    tags: [docker, ps, containers, stopped]
 
-  - id: docker.logs.follow
+  - id: docker.images
+    cmd: docker images
+    desc: List the images on this machine
+    tags: [docker, images, list]
+
+  - id: docker.pull
+    cmd: docker pull <image>
+    desc: Download an image from its registry
+    tags: [docker, pull, image, download]
+    params:
+      image:
+        desc: Image to fetch, such as nginx:latest
+
+  - id: docker.build
+    cmd: docker build -t <tag> .
+    desc: Build an image from the Dockerfile in this directory
+    tags: [docker, build, image, dockerfile]
+    params:
+      tag:
+        desc: Name to give the image, such as myapp:dev
+
+  - id: docker.build.no-cache
+    cmd: docker build --no-cache -t <tag> .
+    desc: Rebuild from scratch when the cache is lying
+    tags: [docker, build, cache]
+    params:
+      tag:
+        desc: Name to give the image
+
+  - id: docker.run
+    cmd: docker run -d --name <name> -p <host-port>:<container-port> <image>
+    desc: Start a container in the background with one port published
+    tags: [docker, run, start, port, detach]
+    params:
+      name:
+        desc: Name to give the container
+      host-port:
+        desc: Port to open on this machine
+      container-port:
+        desc: Port the application listens on inside
+      image:
+        desc: Image to start
+
+  - id: docker.run.interactive
+    cmd: docker run --rm -it <image> <shell:sh>
+    desc: Poke around inside an image without leaving a container behind
+    tags: [docker, run, shell, interactive, throwaway]
+    params:
+      image:
+        desc: Image to start
+      shell:
+        desc: Shell to run, sh on alpine and bash on most others
+
+  - id: docker.run.mount-here
+    cmd:
+      posix: 'docker run --rm -it -v "$PWD:/work" -w /work <image> <command>'
+      powershell: 'docker run --rm -it -v "${PWD}:/work" -w /work <image> <command>'
+    desc: Run a tool from an image against the current directory
+    tags: [docker, run, volume, mount, tool]
+    params:
+      image:
+        desc: Image holding the tool
+      command:
+        desc: Command to run inside it
+
+  - id: docker.start
+    cmd: docker start <container>
+    desc: Start a stopped container again
+    tags: [docker, start, container]
+    params:
+      container:
+        desc: Container name or id
+
+  - id: docker.stop
+    cmd: docker stop <container>
+    desc: Stop a running container
+    tags: [docker, stop, container]
+    params:
+      container:
+        desc: Container name or id
+
+  - id: docker.restart
+    cmd: docker restart <container>
+    desc: Stop and start a container in one go
+    tags: [docker, restart, container]
+    params:
+      container:
+        desc: Container name or id
+
+  - id: docker.rm
+    cmd: docker rm -f <container>
+    desc: Delete a container, stopping it first if it is running
+    tags: [docker, rm, remove, delete, container]
+    danger: true
+    params:
+      container:
+        desc: Container name or id
+
+  - id: docker.rmi
+    cmd: docker rmi <image>
+    desc: Delete an image from this machine
+    tags: [docker, rmi, remove, delete, image]
+    danger: true
+    params:
+      image:
+        desc: Image name or id
+
+  - id: docker.logs
     cmd: docker logs -f --tail <lines:100> <container>
     desc: Watch what a container is printing right now
-    tags: [docker, logs, follow, tail, debug]
+    tags: [docker, logs, follow, tail]
     params:
       container:
         desc: Container name or id
       lines:
         desc: How much history to show before following
 
-  - id: docker.logs.since
-    cmd: docker logs --since <since:10m> <container>
-    desc: Read only what a container printed during an incident
-    tags: [docker, logs, since, incident]
-    params:
-      container:
-        desc: Container name or id
-      since:
-        desc: Duration such as 10m, or a timestamp
-
   - id: docker.exec.shell
     cmd: docker exec -it <container> <shell:sh>
     desc: Get a prompt inside a running container
-    tags: [docker, exec, shell, debug]
+    tags: [docker, exec, shell, bash]
     params:
       container:
         desc: Container name or id
       shell:
         desc: Shell to run, sh on alpine and bash on most others
+
+  - id: docker.inspect
+    cmd: docker inspect <container>
+    desc: Read everything docker knows about a container
+    tags: [docker, inspect, details]
+    params:
+      container:
+        desc: Container name or id
 
   - id: docker.inspect.ip
     cmd: 'docker inspect -f "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}" <container>'
@@ -50,53 +155,53 @@ commands:
       container:
         desc: Container name or id
 
-  - id: docker.inspect.mounts
-    cmd: 'docker inspect -f "{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}" <container>'
-    desc: Find out where a container's data actually lives on the host
-    tags: [docker, inspect, mounts, volumes]
+  - id: docker.stats
+    cmd: docker stats
+    desc: Watch how much cpu and memory each container is using
+    tags: [docker, stats, cpu, memory]
+
+  - id: docker.cp.out
+    cmd: 'docker cp <container>:<path> .'
+    desc: Pull a file out of a container onto the host
+    tags: [docker, cp, copy, file]
     params:
       container:
         desc: Container name or id
+      path:
+        desc: Path inside the container
 
-  - id: docker.stats.snapshot
-    cmd: 'docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"'
-    desc: See which container is eating the machine
-    tags: [docker, stats, cpu, memory, performance]
+  - id: docker.cp.in
+    cmd: 'docker cp <path> <container>:<destination>'
+    desc: Push a file from the host into a container
+    tags: [docker, cp, copy, file]
+    params:
+      path:
+        desc: File on this machine
+      container:
+        desc: Container name or id
+      destination:
+        desc: Path inside the container
 
-  - id: docker.run.throwaway
-    cmd: docker run --rm -it <image> <shell:sh>
-    desc: Poke around inside an image without leaving a container behind
-    tags: [docker, run, temporary, shell]
+  - id: docker.push
+    cmd: docker push <image>
+    desc: Upload an image to its registry
+    tags: [docker, push, image, registry]
     params:
       image:
-        desc: Image to start
-      shell:
-        desc: Shell to run
+        desc: Image name with its tag, such as user/app:1.0
 
-  - id: docker.run.mount-here
-    cmd:
-      posix: 'docker run --rm -it -v "$PWD:/work" -w /work <image> <command>'
-      powershell: 'docker run --rm -it -v "${PWD}:/work" -w /work <image> <command>'
-    desc: Run a tool from an image against the current directory
-    tags: [docker, run, volume, mount, workdir]
+  - id: docker.login
+    cmd: docker login <registry:docker.io>
+    desc: Sign in to a registry before pushing or pulling private images
+    tags: [docker, login, registry, auth]
     params:
-      image:
-        desc: Image holding the tool
-      command:
-        desc: Command to run inside it
+      registry:
+        desc: Registry host
 
-  - id: docker.image.layers
-    cmd: docker history --no-trunc <image>
-    desc: Find out which build step made an image so large
-    tags: [docker, image, history, layers, size]
-    params:
-      image:
-        desc: Image to break down
-
-  - id: docker.image.dangling
-    cmd: docker images -f dangling=true
-    desc: List the untagged images left behind by rebuilds
-    tags: [docker, images, dangling, cleanup]
+  - id: docker.system.df
+    cmd: docker system df
+    desc: See how much disk docker is taking up
+    tags: [docker, disk, space, df]
 
   - id: docker.prune.everything
     cmd: docker system prune -a --volumes
@@ -104,13 +209,35 @@ commands:
     tags: [docker, prune, cleanup, disk, space]
     danger: true
 
-  - id: docker.compose.recreate
-    cmd: docker compose up -d --force-recreate <service>
-    desc: Restart one service from a clean container
-    tags: [docker, compose, restart, recreate]
-    params:
-      service:
-        desc: Service name from the compose file
+  - id: docker.volume.list
+    cmd: docker volume ls
+    desc: List the volumes on this machine
+    tags: [docker, volume, list]
+
+  - id: docker.network.list
+    cmd: docker network ls
+    desc: List the networks docker has created
+    tags: [docker, network, list]
+
+  - id: docker.compose.up
+    cmd: docker compose up -d
+    desc: Start the whole stack in the background
+    tags: [docker, compose, up, start]
+
+  - id: docker.compose.up.build
+    cmd: docker compose up -d --build
+    desc: Rebuild the images and restart what changed
+    tags: [docker, compose, up, build]
+
+  - id: docker.compose.down
+    cmd: docker compose down
+    desc: Stop the stack and remove its containers
+    tags: [docker, compose, down, stop]
+
+  - id: docker.compose.ps
+    cmd: docker compose ps
+    desc: See which services of the stack are running
+    tags: [docker, compose, ps, status]
 
   - id: docker.compose.logs
     cmd: docker compose logs -f --tail <lines:100> <service>
@@ -122,25 +249,20 @@ commands:
       lines:
         desc: How much history to show before following
 
-  - id: docker.compose.config
-    cmd: docker compose config
-    desc: See the compose file with every variable and override resolved
-    tags: [docker, compose, config, debug, environment]
-
-  - id: docker.build.no-cache
-    cmd: docker build --no-cache --progress=plain -t <tag> .
-    desc: Rebuild from scratch and read every step, when the cache is lying
-    tags: [docker, build, cache, debug]
+  - id: docker.compose.exec
+    cmd: docker compose exec <service> <shell:sh>
+    desc: Get a prompt inside one service of the stack
+    tags: [docker, compose, exec, shell]
     params:
-      tag:
-        desc: Name to give the image
+      service:
+        desc: Service name from the compose file
+      shell:
+        desc: Shell to run
 
-  - id: docker.cp.out
-    cmd: 'docker cp <container>:<path> .'
-    desc: Pull a file out of a container onto the host
-    tags: [docker, cp, copy, file]
+  - id: docker.compose.restart
+    cmd: docker compose restart <service>
+    desc: Restart one service of the stack
+    tags: [docker, compose, restart]
     params:
-      container:
-        desc: Container name or id
-      path:
-        desc: Path inside the container
+      service:
+        desc: Service name from the compose file

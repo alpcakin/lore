@@ -44,8 +44,8 @@ const BUILTINS: &[(&str, &str)] = &[
     builtin!("kubernetes"),
     builtin!("network"),
     builtin!("node"),
+    builtin!("python"),
     builtin!("rust"),
-    builtin!("security"),
     builtin!("ssh"),
     builtin!("system"),
     builtin!("text"),
@@ -500,8 +500,8 @@ mod tests {
         let entries = load(None).unwrap();
         let logs = entries
             .iter()
-            .find(|e| e.id == "docker.logs.follow")
-            .expect("docker.logs.follow must exist");
+            .find(|e| e.id == "docker.logs")
+            .expect("docker.logs must exist");
 
         let cmd = logs.cmd_for(ShellFamily::Posix).unwrap();
         assert_eq!(crate::params::names(cmd), ["lines", "container"]);
@@ -515,7 +515,7 @@ mod tests {
             .find(|e| e.id == "sys.ports.listening")
             .unwrap();
 
-        assert!(ports.cmd_for(ShellFamily::Posix).unwrap().contains("ss "));
+        assert!(ports.cmd_for(ShellFamily::Posix).unwrap().contains("lsof "));
         assert!(
             ports
                 .cmd_for(ShellFamily::PowerShell)

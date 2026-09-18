@@ -2,56 +2,79 @@ version: 1
 
 commands:
 
-  - id: net.http.timing
+  - id: net.ping
     cmd:
-      posix: 'curl -w "dns %{time_namelookup}s connect %{time_connect}s tls %{time_appconnect}s total %{time_total}s\n" -o /dev/null -s <url>'
-      powershell: 'curl.exe -w "dns %{time_namelookup}s connect %{time_connect}s tls %{time_appconnect}s total %{time_total}s`n" -o NUL -s <url>'
-    desc: Find out which part of a slow request is actually slow
-    tags: [network, curl, http, latency, performance]
+      posix: ping -c <count:4> <host>
+      powershell: ping -n <count:4> <host>
+    desc: Check whether a host answers at all
+    tags: [network, ping, reachable, latency]
+    params:
+      host:
+        desc: Host name or address
+      count:
+        desc: How many packets to send
+
+  - id: net.dns.resolve
+    cmd: nslookup <host>
+    desc: Check what a name actually resolves to right now
+    tags: [network, dns, resolve, lookup, ip]
+    params:
+      host:
+        desc: Name to look up
+
+  - id: net.http.get
+    cmd:
+      posix: curl -sS <url>
+      powershell: curl.exe -sS <url>
+    desc: Fetch a page or an api response and print it
+    tags: [network, http, curl, get, request]
     params:
       url:
-        desc: Address to measure
+        desc: Address to fetch
 
   - id: net.http.headers
     cmd:
       posix: curl -sSI -L <url>
       powershell: curl.exe -sSI -L <url>
     desc: Read the response headers and follow every redirect on the way
-    tags: [network, curl, http, headers, redirect]
+    tags: [network, http, curl, headers, redirect]
     params:
       url:
         desc: Address to fetch
+
+  - id: net.http.download
+    cmd:
+      posix: curl -fsSL -o <file> <url>
+      powershell: curl.exe -fsSL -o <file> <url>
+    desc: Download a file, following redirects
+    tags: [network, http, curl, download, file]
+    params:
+      file:
+        desc: Name to save it as
+      url:
+        desc: Address to download
 
   - id: net.http.post-json
     cmd:
       posix: 'curl -sS -X POST -H "Content-Type: application/json" -d ''<body>'' <url>'
       powershell: 'curl.exe -sS -X POST -H "Content-Type: application/json" -d ''<body>'' <url>'
     desc: Send a JSON body to an endpoint without opening a client
-    tags: [network, curl, http, post, json, api]
+    tags: [network, http, curl, post, json, api]
     params:
       url:
         desc: Endpoint to post to
       body:
         desc: JSON document to send
 
-  - id: net.dns.resolve
+  - id: net.http.timing
     cmd:
-      posix: dig +short <host>
-      powershell: 'Resolve-DnsName <host> | Select-Object Name, Type, IPAddress'
-    desc: Check what a name actually resolves to right now
-    tags: [network, dns, dig, resolve, host]
+      posix: 'curl -w "dns %{time_namelookup}s connect %{time_connect}s tls %{time_appconnect}s total %{time_total}s\n" -o /dev/null -s <url>'
+      powershell: 'curl.exe -w "dns %{time_namelookup}s connect %{time_connect}s tls %{time_appconnect}s total %{time_total}s`n" -o NUL -s <url>'
+    desc: Find out which part of a slow request is actually slow
+    tags: [network, http, curl, timing, latency, slow]
     params:
-      host:
-        desc: Name to look up
-
-  - id: net.dns.trace
-    cmd:
-      posix: dig +trace <host>
-    desc: Follow a name from the root servers down, when caching is suspect
-    tags: [network, dns, dig, trace, propagation]
-    params:
-      host:
-        desc: Name to look up
+      url:
+        desc: Address to measure
 
   - id: net.tls.certificate
     cmd:
@@ -69,7 +92,7 @@ commands:
       posix: nc -vz -w <timeout:5> <host> <port>
       powershell: 'Test-NetConnection <host> -Port <port>'
     desc: Check whether a port is reachable before blaming the application
-    tags: [network, port, connectivity, firewall, test]
+    tags: [network, port, reachable, firewall, netcat]
     params:
       host:
         desc: Host to reach
@@ -83,7 +106,7 @@ commands:
       posix: traceroute -n <host>
       powershell: 'Test-NetConnection <host> -TraceRoute'
     desc: See where packets stop when a host is unreachable
-    tags: [network, traceroute, routing, latency]
+    tags: [network, traceroute, route, hops]
     params:
       host:
         desc: Host to trace
@@ -93,7 +116,14 @@ commands:
       posix: curl -sS https://ifconfig.me
       powershell: 'Invoke-RestMethod https://ifconfig.me'
     desc: Find the address this machine appears to come from
-    tags: [network, ip, public, address, nat]
+    tags: [network, ip, public, address, external]
+
+  - id: net.interfaces
+    cmd:
+      posix: ifconfig
+      powershell: 'Get-NetIPAddress | Select-Object InterfaceAlias, IPAddress, PrefixLength'
+    desc: Read this machine's own addresses
+    tags: [network, ip, interfaces, address, local]
 
   - id: net.serve.here
     cmd:
@@ -104,10 +134,3 @@ commands:
     params:
       port:
         desc: Port to listen on
-
-  - id: net.interfaces
-    cmd:
-      posix: ip -brief address
-      powershell: 'Get-NetIPAddress | Select-Object InterfaceAlias, IPAddress, PrefixLength'
-    desc: Read this machine's addresses without pages of output
-    tags: [network, interfaces, address, ip]

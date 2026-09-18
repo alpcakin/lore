@@ -7,7 +7,18 @@ commands:
       posix: grep -rIn --exclude-dir=.git "<pattern>" <path:.>
       powershell: 'Select-String -Pattern "<pattern>" -Path <path:.> -Recurse | Select-Object Path, LineNumber, Line'
     desc: Find where a string appears across a whole tree
-    tags: [text, grep, search, recursive, code]
+    tags: [text, grep, search, find, recursive]
+    params:
+      pattern:
+        desc: Text or regular expression to look for
+      path:
+        desc: Where to start looking
+
+  - id: text.search.ignore-case
+    cmd:
+      posix: grep -rIni --exclude-dir=.git "<pattern>" <path:.>
+    desc: Search a tree without caring about capitalisation
+    tags: [text, grep, search, case, insensitive]
     params:
       pattern:
         desc: Text or regular expression to look for
@@ -18,7 +29,7 @@ commands:
     cmd:
       posix: grep -rIn -C <lines:3> "<pattern>" <path:.>
     desc: See the lines around a match instead of the match alone
-    tags: [text, grep, context, search]
+    tags: [text, grep, search, context]
     params:
       pattern:
         desc: Text or regular expression to look for
@@ -31,55 +42,106 @@ commands:
     cmd:
       posix: grep -rIl "<pattern>" <path:.>
     desc: List which files mention something, without the matching lines
-    tags: [text, grep, files, list, search]
+    tags: [text, grep, search, files, list]
     params:
       pattern:
         desc: Text or regular expression to look for
       path:
         desc: Where to start looking
 
-  - id: text.replace.in-tree
+  - id: text.replace.in-file
     cmd:
-      posix: 'grep -rIl "<from>" <path:.> | xargs sed -i "s/<from>/<to>/g"'
-    desc: Rename something everywhere it appears
-    tags: [text, sed, replace, rename, refactor]
-    danger: true
+      posix: sed -i.bak 's/<from>/<to>/g' <path>
+      powershell: '(Get-Content <path>) -replace "<from>", "<to>" | Set-Content <path>'
+    desc: Replace every occurrence of some text in one file
+    tags: [text, sed, replace, substitute, edit]
     params:
       from:
         desc: Text to replace
       to:
         desc: Text to put in its place
       path:
+        desc: File to edit
+
+  - id: text.head
+    cmd:
+      posix: head -n <lines:20> <path>
+      powershell: 'Get-Content <path> -Head <lines:20>'
+    desc: Read the first lines of a file
+    tags: [text, head, first, lines, file]
+    params:
+      lines:
+        desc: How many lines to show
+      path:
+        desc: File to read
+
+  - id: text.tail
+    cmd:
+      posix: tail -n <lines:20> <path>
+      powershell: 'Get-Content <path> -Tail <lines:20>'
+    desc: Read the last lines of a file
+    tags: [text, tail, last, lines, file]
+    params:
+      lines:
+        desc: How many lines to show
+      path:
+        desc: File to read
+
+  - id: text.line.range
+    cmd:
+      posix: "sed -n '<from>,<to>p' <path>"
+      powershell: '(Get-Content <path>)[(<from> - 1)..(<to> - 1)]'
+    desc: Read the lines a stack trace pointed at, without opening an editor
+    tags: [text, sed, lines, range, file]
+    params:
+      from:
+        desc: First line to print
+      to:
+        desc: Last line to print
+      path:
+        desc: File to read
+
+  - id: text.count.lines
+    cmd:
+      posix: wc -l <path>
+      powershell: '(Get-Content <path>).Count'
+    desc: Count the lines in a file
+    tags: [text, wc, count, lines]
+    params:
+      path:
+        desc: File to count
+
+  - id: text.count.occurrences
+    cmd:
+      posix: 'grep -rIo "<pattern>" <path:.> | sort | uniq -c | sort -rn'
+    desc: Count how often something appears, most common first
+    tags: [text, grep, count, occurrences, frequency]
+    params:
+      pattern:
+        desc: Text or regular expression to count
+      path:
         desc: Where to start looking
 
-  - id: text.json.query
-    cmd: 'jq "<filter>" <path>'
-    desc: Pull one field out of a JSON document
-    tags: [text, jq, json, query, filter]
-    params:
-      filter:
-        desc: jq expression, such as .items[].name
-      path:
-        desc: JSON file to read
-
-  - id: text.json.pretty
+  - id: text.sort.unique
     cmd:
-      posix: jq . <path>
-      powershell: 'Get-Content <path> -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 20'
-    desc: Make a minified JSON file readable
-    tags: [text, json, format, pretty, indent]
+      posix: sort <path> | uniq -c | sort -rn
+      powershell: 'Get-Content <path> | Group-Object | Sort-Object Count -Descending | Select-Object Count, Name'
+    desc: Find the most repeated lines in a file
+    tags: [text, sort, uniq, unique, duplicates, count]
     params:
       path:
-        desc: JSON file to format
+        desc: File to read
 
-  - id: text.yaml.check
+  - id: text.column.extract
     cmd:
-      posix: 'python3 -c "import sys,yaml;yaml.safe_load(open(sys.argv[1]))" <path>'
-    desc: Find out whether a YAML file parses before something else refuses it
-    tags: [text, yaml, validate, parse, lint]
+      posix: "awk '{print $<column:1>}' <path>"
+    desc: Pull one column out of whitespace separated output
+    tags: [text, awk, column, field, cut]
     params:
+      column:
+        desc: Which field to print, starting at 1
       path:
-        desc: YAML file to check
+        desc: File to read
 
   - id: text.diff.two-files
     cmd:
@@ -93,46 +155,42 @@ commands:
       right:
         desc: File to compare against
 
-  - id: text.count.occurrences
+  - id: text.json.pretty
     cmd:
-      posix: 'grep -rIo "<pattern>" <path:.> | sort | uniq -c | sort -rn'
-    desc: Count how often something appears, most common first
-    tags: [text, count, frequency, uniq, sort]
+      posix: jq . <path>
+      powershell: 'Get-Content <path> -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 20'
+    desc: Make a minified JSON file readable
+    tags: [text, json, jq, pretty, format]
     params:
-      pattern:
-        desc: Text or regular expression to count
       path:
-        desc: Where to start looking
+        desc: JSON file to format
 
-  - id: text.column.extract
-    cmd:
-      posix: "awk '{print $<column:1>}' <path>"
-    desc: Pull one column out of whitespace separated output
-    tags: [text, awk, column, field, extract]
+  - id: text.json.query
+    cmd: 'jq "<filter>" <path>'
+    desc: Pull one field out of a JSON document
+    tags: [text, json, jq, query, filter]
     params:
-      column:
-        desc: Which field to print, starting at 1
+      filter:
+        desc: jq expression, such as .items[].name
       path:
-        desc: File to read
+        desc: JSON file to read
 
-  - id: text.line.range
+  - id: text.base64.encode
     cmd:
-      posix: "sed -n '<from>,<to>p' <path>"
-    desc: Read the lines a stack trace pointed at, without opening an editor
-    tags: [text, sed, lines, range, extract]
+      posix: echo -n '<text>' | base64
+      powershell: '[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("<text>"))'
+    desc: Encode some text as base64
+    tags: [text, base64, encode]
     params:
-      from:
-        desc: First line to print
-      to:
-        desc: Last line to print
-      path:
-        desc: File to read
+      text:
+        desc: Text to encode
 
-  - id: text.encoding.strip-bom
+  - id: text.base64.decode
     cmd:
-      posix: "sed -i '1s/^\\xEF\\xBB\\xBF//' <path>"
-    desc: Remove the byte order mark that makes a file fail to parse
-    tags: [text, encoding, bom, utf8, fix]
+      posix: echo '<text>' | base64 -d
+      powershell: '[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("<text>"))'
+    desc: Decode base64 back into text
+    tags: [text, base64, decode]
     params:
-      path:
-        desc: File to clean
+      text:
+        desc: Base64 to decode

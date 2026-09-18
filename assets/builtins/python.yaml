@@ -1,0 +1,75 @@
+version: 1
+
+commands:
+
+  - id: python.venv.create
+    cmd:
+      posix: python3 -m venv .venv
+      powershell: python -m venv .venv
+    desc: Create a virtual environment for this project
+    tags: [python, venv, virtualenv, environment, create]
+
+  - id: python.venv.activate
+    cmd:
+      posix: source .venv/bin/activate
+      powershell: .venv\Scripts\Activate.ps1
+    desc: Switch this shell into the project's virtual environment
+    tags: [python, venv, virtualenv, activate, environment]
+
+  - id: python.pip.install
+    cmd: pip install <package>
+    desc: Install a package into the active environment
+    tags: [python, pip, install, package]
+    params:
+      package:
+        desc: Package name, with a version if you need one
+
+  - id: python.pip.requirements
+    cmd: pip install -r requirements.txt
+    desc: Install everything the project's requirements file lists
+    tags: [python, pip, install, requirements]
+
+  - id: python.pip.freeze
+    cmd: pip freeze > requirements.txt
+    desc: Write the installed packages and versions to the requirements file
+    tags: [python, pip, freeze, requirements, lock]
+
+  - id: python.pip.outdated
+    cmd: pip list --outdated
+    desc: See which packages have newer versions available
+    tags: [python, pip, outdated, update]
+
+  - id: python.run.module
+    cmd:
+      posix: python3 -m <module>
+      powershell: python -m <module>
+    desc: Run a module the way its package intends
+    tags: [python, run, module]
+    params:
+      module:
+        desc: Module name, such as pytest or http.server
+
+  - id: python.test
+    cmd: pytest -q <path:.>
+    desc: Run the tests with pytest
+    tags: [python, pytest, test]
+    params:
+      path:
+        desc: Directory or file to test
+
+  - id: python.json.pretty
+    cmd:
+      posix: python3 -m json.tool <path>
+      powershell: python -m json.tool <path>
+    desc: Make a minified JSON file readable, without installing anything
+    tags: [python, json, pretty, format]
+    params:
+      path:
+        desc: JSON file to format
+
+  - id: python.version
+    cmd:
+      posix: python3 --version
+      powershell: python --version
+    desc: Check which python this shell runs
+    tags: [python, version]

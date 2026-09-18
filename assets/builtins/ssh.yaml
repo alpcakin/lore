@@ -2,15 +2,41 @@ version: 1
 
 commands:
 
+  - id: ssh.connect
+    cmd: ssh <destination>
+    desc: Open a shell on another machine
+    tags: [ssh, connect, remote, login]
+    params:
+      destination:
+        desc: user@host to connect to
+
+  - id: ssh.connect.port
+    cmd: ssh -p <port> <destination>
+    desc: Connect to a host whose ssh is not on the usual port
+    tags: [ssh, connect, port]
+    params:
+      port:
+        desc: Port ssh listens on
+      destination:
+        desc: user@host to connect to
+
   - id: ssh.key.new
-    cmd: ssh-keygen -t ed25519 -C <comment> -f ~/.ssh/<name>
-    desc: Create a key for one host instead of reusing the same one everywhere
-    tags: [ssh, key, keygen, ed25519, security]
+    cmd: ssh-keygen -t ed25519 -C "<comment>"
+    desc: Create a new ssh key pair
+    tags: [ssh, key, keygen, ed25519, generate]
     params:
       comment:
-        desc: What this key is for, usually an email or a host name
-      name:
-        desc: File name for the key, under the ssh directory
+        desc: What this key is for, usually your email
+
+  - id: ssh.key.copy
+    cmd:
+      posix: ssh-copy-id <destination>
+      powershell: 'type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh <destination> "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"'
+    desc: Put your public key on a host so it stops asking for a password
+    tags: [ssh, key, copy, authorized_keys, password]
+    params:
+      destination:
+        desc: user@host to install it on
 
   - id: ssh.key.fingerprint
     cmd: ssh-keygen -lf <path>
@@ -20,73 +46,73 @@ commands:
       path:
         desc: Public or private key file
 
-  - id: ssh.key.copy
+  - id: ssh.key.add-agent
     cmd:
-      posix: ssh-copy-id -i ~/.ssh/<name>.pub <destination>
-    desc: Put a public key on a host without editing the file by hand
-    tags: [ssh, key, authorized-keys, copy, setup]
+      posix: ssh-add ~/.ssh/<name:id_ed25519>
+      powershell: 'ssh-add $env:USERPROFILE\.ssh\<name:id_ed25519>'
+    desc: Unlock a key once for the whole session
+    tags: [ssh, key, agent, passphrase]
     params:
       name:
         desc: Key file name under the ssh directory
+
+  - id: ssh.copy.file
+    cmd: scp <source> <destination>
+    desc: Copy a file to or from another machine
+    tags: [ssh, scp, copy, file, transfer]
+    params:
+      source:
+        desc: Local path, or user@host:/path
       destination:
-        desc: user@host to install it on
-
-  - id: ssh.debug.connection
-    cmd: ssh -vvv <destination>
-    desc: Find out which key is being offered and why a login is refused
-    tags: [ssh, debug, verbose, auth, refused]
-    params:
-      destination:
-        desc: user@host to connect to
-
-  - id: ssh.tunnel.local
-    cmd: ssh -N -L <local>:<host>:<remote> <jump>
-    desc: Reach a service that only the jump host can see
-    tags: [ssh, tunnel, forward, port, jump]
-    params:
-      local:
-        desc: Port to open on this machine
-      host:
-        desc: Host to reach from the jump host
-      remote:
-        desc: Port on that host
-      jump:
-        desc: user@host to tunnel through
-
-  - id: ssh.tunnel.socks
-    cmd: ssh -N -D <port:1080> <destination>
-    desc: Route a browser through a remote host for one session
-    tags: [ssh, socks, proxy, tunnel]
-    params:
-      port:
-        desc: Local port for the proxy
-      destination:
-        desc: user@host to proxy through
-
-  - id: ssh.config.effective
-    cmd: ssh -G <destination>
-    desc: See which config block a host is actually matching
-    tags: [ssh, config, debug, match, effective]
-    params:
-      destination:
-        desc: Host alias to resolve
-
-  - id: ssh.host.forget
-    cmd: ssh-keygen -R <host>
-    desc: Drop a known host after it was rebuilt and its key changed
-    tags: [ssh, known-hosts, key, mismatch, reinstall]
-    params:
-      host:
-        desc: Host name or address to forget
+        desc: user@host:/path, or a local path
 
   - id: ssh.copy.directory
+    cmd: scp -r <source> <destination>
+    desc: Copy a whole directory to or from another machine
+    tags: [ssh, scp, copy, directory, transfer]
+    params:
+      source:
+        desc: Local directory, or user@host:/path
+      destination:
+        desc: user@host:/path, or a local path
+
+  - id: ssh.sync.directory
     cmd:
-      posix: rsync -avzP --delete <source> <destination>
-    desc: Mirror a directory to a host and resume where it stopped
-    tags: [ssh, rsync, copy, sync, transfer]
-    danger: true
+      posix: rsync -avzP <source> <destination>
+    desc: Mirror a directory to a host, sending only what changed
+    tags: [ssh, rsync, sync, copy, directory, resume]
     params:
       source:
         desc: Local directory, with a trailing slash to copy its contents
       destination:
         desc: user@host:/path to write to
+
+  - id: ssh.tunnel.local
+    cmd: ssh -N -L <local>:<host>:<remote> <jump>
+    desc: Reach a service that only the remote machine can see
+    tags: [ssh, tunnel, forward, port, jump]
+    params:
+      local:
+        desc: Port to open on this machine
+      host:
+        desc: Host to reach from the remote machine, often localhost
+      remote:
+        desc: Port on that host
+      jump:
+        desc: user@host to tunnel through
+
+  - id: ssh.debug.connection
+    cmd: ssh -v <destination>
+    desc: Find out which key is being offered and why a login is refused
+    tags: [ssh, debug, verbose, permission, denied]
+    params:
+      destination:
+        desc: user@host to connect to
+
+  - id: ssh.host.forget
+    cmd: ssh-keygen -R <host>
+    desc: Drop a known host after it was rebuilt and its key changed
+    tags: [ssh, known_hosts, remove, host, key, changed]
+    params:
+      host:
+        desc: Host name or address to forget

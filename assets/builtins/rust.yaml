@@ -2,70 +2,98 @@ version: 1
 
 commands:
 
-  - id: rust.check.fast
-    cmd: cargo check --all-targets --all-features
+  - id: rust.new
+    cmd: cargo new <name>
+    desc: Start a new binary project
+    tags: [rust, cargo, new, project, init]
+    params:
+      name:
+        desc: Project name, which becomes the directory
+
+  - id: rust.build
+    cmd: cargo build
+    desc: Compile the project in debug mode
+    tags: [rust, cargo, build, compile]
+
+  - id: rust.build.release
+    cmd: cargo build --release
+    desc: Compile the optimised binary
+    tags: [rust, cargo, build, release, optimised]
+
+  - id: rust.run
+    cmd: cargo run
+    desc: Build and run the project
+    tags: [rust, cargo, run]
+
+  - id: rust.check
+    cmd: cargo check --all-targets
     desc: Find out whether it compiles without waiting for a build
     tags: [rust, cargo, check, compile, fast]
 
-  - id: rust.lint.strict
-    cmd: cargo clippy --all-targets --all-features -- -D warnings
-    desc: Run the lints the way continuous integration will run them
-    tags: [rust, cargo, clippy, lint, ci]
+  - id: rust.test
+    cmd: cargo test
+    desc: Run every test
+    tags: [rust, cargo, test]
 
   - id: rust.test.one
     cmd: cargo test <filter> -- --nocapture
     desc: Run one test and see everything it printed
-    tags: [rust, cargo, test, filter, debug]
+    tags: [rust, cargo, test, filter, nocapture]
     params:
       filter:
         desc: Part of the test name
 
-  - id: rust.test.ignored
-    cmd: cargo test -- --ignored
-    desc: Run the slow tests that are skipped by default
-    tags: [rust, cargo, test, ignored, slow]
+  - id: rust.lint
+    cmd: cargo clippy --all-targets -- -D warnings
+    desc: Run the lints the way continuous integration will run them
+    tags: [rust, cargo, clippy, lint, warnings]
+
+  - id: rust.format
+    cmd: cargo fmt
+    desc: Format every file in the project
+    tags: [rust, cargo, fmt, format, rustfmt]
+
+  - id: rust.add
+    cmd: cargo add <crate>
+    desc: Add a dependency to Cargo.toml
+    tags: [rust, cargo, add, dependency, crate]
+    params:
+      crate:
+        desc: Crate name, with features if you need them
+
+  - id: rust.deps.update
+    cmd: cargo update
+    desc: Move the lock file to the newest versions Cargo.toml allows
+    tags: [rust, cargo, update, dependencies, lockfile]
 
   - id: rust.deps.tree
     cmd: cargo tree -i <crate>
     desc: Find out which dependency is pulling in a crate
-    tags: [rust, cargo, tree, dependencies, transitive]
+    tags: [rust, cargo, tree, dependencies, why]
     params:
       crate:
         desc: Crate to trace back
-
-  - id: rust.deps.outdated
-    cmd: cargo update --dry-run
-    desc: See which dependencies have newer versions available
-    tags: [rust, cargo, update, dependencies, versions]
-
-  - id: rust.expand.macro
-    cmd: cargo expand <path>
-    desc: Read what a derive or macro actually generated
-    tags: [rust, cargo, expand, macro, derive, debug]
-    params:
-      path:
-        desc: Module path, such as store::definitions
-
-  - id: rust.build.release
-    cmd: cargo build --release --target <target>
-    desc: Build the optimised binary for another platform
-    tags: [rust, cargo, build, release, cross, target]
-    params:
-      target:
-        desc: Target triple, such as x86_64-unknown-linux-gnu
 
   - id: rust.doc.open
     cmd: cargo doc --no-deps --open
     desc: Read this crate's own documentation as its users will
     tags: [rust, cargo, doc, documentation]
 
-  - id: rust.publish.dry-run
-    cmd: cargo publish --dry-run
-    desc: Find out what would stop a release before tagging one
-    tags: [rust, cargo, publish, release, crates-io]
+  - id: rust.install
+    cmd: cargo install <crate>
+    desc: Install a tool from crates.io
+    tags: [rust, cargo, install, tool, binary]
+    params:
+      crate:
+        desc: Crate that ships a binary
 
-  - id: rust.clean.target
+  - id: rust.toolchain.update
+    cmd: rustup update
+    desc: Update the rust toolchain itself
+    tags: [rust, rustup, update, toolchain]
+
+  - id: rust.clean
     cmd: cargo clean
     desc: Delete the build directory when the cache stops making sense
-    tags: [rust, cargo, clean, cache, disk]
+    tags: [rust, cargo, clean, target]
     danger: true
