@@ -11,6 +11,7 @@ before it can be used.
 | `install.ps1`         | The Windows one liner in the README                              |
 | `scoop/lore.json`     | Copied into the Scoop bucket repository                          |
 | `homebrew/lore.rb`    | Copied into the Homebrew tap repository                          |
+| `fill-checksums.sh`   | Writes a published release's checksums into the two above       |
 
 Both installer scripts are served straight from `main` on raw.githubusercontent,
 so a change to either takes effect the moment it is pushed. They resolve the
@@ -36,8 +37,9 @@ publish scope for `cmdlore`.
 2. Tag with `v<version>` and push the tag
 3. The release workflow builds six targets and opens a draft release
 4. Check the draft, then publish it
-5. Fill the checksums from `SHA256SUMS` into the Scoop manifest and the Homebrew
-   formula, and push both to their own repositories. Without
+5. Run `packaging/fill-checksums.sh <version>`, which writes the checksums from
+   `SHA256SUMS` into the Scoop manifest and the Homebrew formula, then push
+   both to their own repositories. Without
    `CARGO_REGISTRY_TOKEN` the crates.io job skips with a warning rather than
    failing, so the archives are released either way
 6. Submit to WinGet, which needs the release to be published first:
