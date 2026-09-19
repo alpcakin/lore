@@ -126,7 +126,7 @@ commands:
     cmd:
       posix: df -h
       powershell: 'Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free'
-    desc: Check how much room is left on each drive
+    desc: Check how much disk space is left on each drive
     tags: [disk, space, free, df, storage]
 
   - id: sys.disk.usage

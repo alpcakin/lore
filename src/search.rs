@@ -10,7 +10,21 @@
 //! Match quality is the primary sort key and is deliberately coarse. Fine
 //! grained scores reorder neighbouring entries for reasons the user cannot see,
 //! and a picker whose order cannot be predicted breaks the muscle memory it
-//! exists to serve. Frecency only breaks ties inside a bucket.
+//! exists to serve. Frecency only breaks ties inside a bucket, and the shorter
+//! command breaks what frecency cannot, which is every tie on a fresh install.
+//!
+//! The buckets, strongest first: every term starting a word or the field, or
+//! not; then the field the weakest term was found in, command before
+//! description before tags; then whether that term opened the field or a word
+//! inside it. The field outranks the position because the command is what the
+//! user is looking at and typing towards. "git st" is spelled out in
+//! `git status`, and a description that merely begins with "Stage" should not
+//! put `git add` above it.
+//!
+//! Inside the top bucket, a command that begins with the query exactly as
+//! typed comes first. Typing the start of a command is the most direct thing a
+//! user can do, and `git commit` should not lose to `git cherry-pick <commit>`
+//! because a placeholder happens to share its name.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -44,14 +58,41 @@ enum Field {
     Cmd,
 }
 
+/// How well a term matched, ordered weakest to strongest.
+///
+/// The fields are compared in declaration order, which is the whole ranking
+/// policy: see the module documentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Hit {
+    /// The term starts the field or a word in it, rather than sitting inside
+    /// a word.
+    whole: bool,
+    field: Field,
+    quality: Quality,
+}
+
+impl Hit {
+    fn new(field: Field, quality: Quality) -> Self {
+        Self {
+            whole: quality != Quality::Inside,
+            field,
+            quality,
+        }
+    }
+}
+
 /// Everything the ordering depends on, highest wins.
 struct Rank {
-    quality: Option<(Quality, Field)>,
+    quality: Option<Hit>,
+    /// The command begins with the query, spaces normalised.
+    leads: bool,
     pinned: bool,
     /// User entries outrank builtins only while the query is empty. Once the
     /// user is searching, a builtin may well be exactly what they want.
     layer: Option<Layer>,
     frecency: f64,
+    /// Length of the command in characters. Shorter wins.
+    length: usize,
 }
 
 /// Indices into `candidates`, best first, with non-matching entries removed.
@@ -61,6 +102,7 @@ pub fn rank(
     query: &str,
 ) -> Vec<usize> {
     let terms = terms(query);
+    let phrase = terms.join(" ");
     let mut ranked: Vec<(usize, Rank)> = Vec::with_capacity(candidates.len());
 
     for (index, candidate) in candidates.iter().enumerate() {
@@ -78,9 +120,11 @@ pub fn rank(
             index,
             Rank {
                 quality,
+                leads: !phrase.is_empty() && starts_with_ignore_case(candidate.cmd, &phrase),
                 pinned: score.is_some_and(|s| s.pinned),
                 layer: quality.is_none().then_some(candidate.entry.layer),
                 frecency: score.map(|s| s.value).unwrap_or_default(),
+                length: candidate.cmd.chars().count(),
             },
         ));
     }
@@ -136,7 +180,7 @@ fn terms(query: &str) -> Vec<String> {
 ///
 /// Taking the weakest is what keeps an entry that only mentions one term in its
 /// tags below an entry whose command contains them all.
-fn all_terms(candidate: &Candidate<'_>, terms: &[String]) -> Option<(Quality, Field)> {
+fn all_terms(candidate: &Candidate<'_>, terms: &[String]) -> Option<Hit> {
     let tags = candidate.entry.tags.join(" ");
     let fields = [
         (Field::Cmd, candidate.cmd),
@@ -150,11 +194,11 @@ fn all_terms(candidate: &Candidate<'_>, terms: &[String]) -> Option<(Quality, Fi
             fields
                 .iter()
                 .filter_map(|(field, haystack)| {
-                    quality_of(haystack, term).map(|quality| (quality, *field))
+                    quality_of(haystack, term).map(|quality| Hit::new(*field, quality))
                 })
                 .max()
         })
-        .try_fold(None, |weakest: Option<(Quality, Field)>, best| {
+        .try_fold(None, |weakest: Option<Hit>, best| {
             let best = best?;
             Some(Some(match weakest {
                 Some(weakest) => weakest.min(best),
@@ -220,9 +264,11 @@ fn compare(left: &Rank, right: &Rank) -> Ordering {
     right
         .quality
         .cmp(&left.quality)
+        .then(right.leads.cmp(&left.leads))
         .then(right.pinned.cmp(&left.pinned))
         .then(right.layer.cmp(&left.layer))
         .then(right.frecency.total_cmp(&left.frecency))
+        .then(left.length.cmp(&right.length))
 }
 
 #[cfg(test)]
@@ -521,6 +567,134 @@ mod tests {
             order(&entries, &HashMap::new(), "arg"),
             ["word.start", "inside"]
         );
+    }
+
+    /// Every word of "git st" can be found in `git status`. `git add -A`
+    /// only gets there by borrowing "st" from the start of its description,
+    /// which is a weaker claim however early in the field it sits.
+    #[test]
+    fn a_query_found_whole_in_the_command_outranks_one_spread_across_fields() {
+        let entries = vec![
+            entry(
+                "git.add.all",
+                "git add -A",
+                "Stage every change",
+                &[],
+                Layer::Builtin,
+            ),
+            entry(
+                "git.status",
+                "git status",
+                "See what has changed",
+                &[],
+                Layer::Builtin,
+            ),
+        ];
+        assert_eq!(order(&entries, &HashMap::new(), "git st")[0], "git.status");
+    }
+
+    #[test]
+    fn a_command_that_begins_with_the_query_comes_first() {
+        let entries = vec![
+            entry(
+                "git.cherry-pick",
+                "git cherry-pick <commit>",
+                "Copy one commit",
+                &[],
+                Layer::Builtin,
+            ),
+            entry(
+                "git.commit",
+                "git commit -m \"<message>\"",
+                "Record the staged changes",
+                &[],
+                Layer::Builtin,
+            ),
+        ];
+        assert_eq!(
+            order(&entries, &HashMap::new(), "git  commit")[0],
+            "git.commit"
+        );
+    }
+
+    /// Nothing tells two equally good matches apart before either has been
+    /// used. The shorter command is the more basic one, and the one a newcomer
+    /// is more likely to be looking for.
+    #[test]
+    fn the_plainer_command_wins_a_tie() {
+        let entries = vec![
+            entry(
+                "git.stash",
+                "git stash push -u",
+                "Put changes aside",
+                &[],
+                Layer::Builtin,
+            ),
+            entry(
+                "git.status",
+                "git status",
+                "See what has changed",
+                &[],
+                Layer::Builtin,
+            ),
+        ];
+        assert_eq!(order(&entries, &HashMap::new(), "git st")[0], "git.status");
+    }
+
+    #[test]
+    fn a_used_command_still_beats_a_shorter_one() {
+        let entries = vec![
+            entry(
+                "git.stash",
+                "git stash push -u",
+                "Put changes aside",
+                &[],
+                Layer::Builtin,
+            ),
+            entry(
+                "git.status",
+                "git status",
+                "See what has changed",
+                &[],
+                Layer::Builtin,
+            ),
+        ];
+        let scores = scored(&[("git.stash", 1.0)]);
+        assert_eq!(order(&entries, &scores, "git st")[0], "git.stash");
+    }
+
+    /// Queries a first time user types, checked against the library that
+    /// actually ships rather than a hand built sample. The first one is the
+    /// README demo.
+    #[test]
+    fn everyday_queries_find_the_everyday_command_first() {
+        let entries = crate::store::definitions::load(None).unwrap();
+        let candidates: Vec<Candidate<'_>> = entries
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .cmd_for(crate::model::ShellFamily::Posix)
+                    .map(|cmd| Candidate { entry, cmd })
+            })
+            .collect();
+
+        let expectations = [
+            ("deleted", "git.log.pickaxe"),
+            ("git st", "git.status"),
+            ("git push", "git.push"),
+            ("git commit", "git.commit"),
+            ("docker ps", "docker.ps"),
+            ("docker logs", "docker.logs"),
+            ("kubectl logs", "k8s.logs.follow"),
+            ("disk", "sys.disk.free"),
+        ];
+
+        for (query, expected) in expectations {
+            let first = rank(&candidates, &HashMap::new(), query)
+                .first()
+                .map(|&index| candidates[index].entry.id.as_str());
+            assert_eq!(first, Some(expected), "query {query:?}");
+        }
     }
 
     #[test]
