@@ -112,6 +112,16 @@ impl Machine<'_> {
     }
 }
 
+/// Whether a failed command's message mentions `text`.
+///
+/// On Windows lore writes errors to the console device rather than stderr,
+/// because a PowerShell key handler hands its child a stderr that goes
+/// nowhere. A test has no console to read, so there only the failure itself
+/// can be checked.
+fn says(output: &Output, text: &str) -> bool {
+    cfg!(windows) || String::from_utf8_lossy(&output.stderr).contains(text)
+}
+
 fn git(dir: &Path, arguments: &[&str]) {
     let output = Command::new("git")
         .arg("-C")
@@ -247,7 +257,7 @@ fn syncing_before_setting_it_up_says_what_to_do() {
 
     let output = laptop.run(&["sync"]);
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("lore sync init"));
+    assert!(says(&output, "lore sync init"));
 
     let status = laptop.ok(&["sync", "status"]);
     assert!(status.contains("not set up"), "said {status}");
@@ -262,7 +272,7 @@ fn switching_repositories_needs_a_disconnect_first() {
     let other = world.root.join("other.git");
     let output = laptop.run(&["sync", "init", &other.display().to_string()]);
     assert!(!output.status.success(), "switched without being asked to");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("disconnect"));
+    assert!(says(&output, "disconnect"));
 
     laptop.save("echo kept", "Stays");
     laptop.ok(&["sync", "disconnect"]);
