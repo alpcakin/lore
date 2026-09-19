@@ -3,28 +3,28 @@
 class Lore < Formula
   desc "Command library that lives in your shell"
   homepage "https://github.com/alpcakin/lore"
-  version "0.1.1"
+  version "0.1.2"
   license any_of: ["MIT", "Apache-2.0"]
 
   on_macos do
     on_arm do
       url "https://github.com/alpcakin/lore/releases/download/v#{version}/lore-v#{version}-aarch64-apple-darwin.tar.gz"
-      sha256 "1949d5afab4e9fd72e64c5da23d5db298ec05887921335c5b4784c4801c45277"
+      sha256 "fed0dfed1fd9754ab5468aa6af179b69d47b3319d9d237fa37ebf679d09ae842"
     end
     on_intel do
       url "https://github.com/alpcakin/lore/releases/download/v#{version}/lore-v#{version}-x86_64-apple-darwin.tar.gz"
-      sha256 "cc9f698a4521fa696ecaa9a2252ff957e8daeebbb9f3180345f715edb5cd76ee"
+      sha256 "95fbc892fe67996c39e65f0a576077598b16b20cd5e1a30cf44a1521a5f3bacd"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/alpcakin/lore/releases/download/v#{version}/lore-v#{version}-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "6ba6392b8b5c8150e11b057db0a58535f784d637b3154dc62bcfb940124ea4ac"
+      sha256 "2e6cf4e3091742a3e6a3b9f5ba6af327482a5f9e628f3c68cc446ced1e2a4390"
     end
     on_intel do
       url "https://github.com/alpcakin/lore/releases/download/v#{version}/lore-v#{version}-x86_64-unknown-linux-musl.tar.gz"
-      sha256 "aaffc98b27999a9d072e8442e5cd36293595766ad5d2a3a4ebe8c3c1caa96804"
+      sha256 "6157ce4cd7d88fc6c332dca35e9ff44e7c1d5b0831863d9eb15e3ee0f0707034"
     end
   end
 
