@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -136,7 +137,9 @@ impl Cli {
     pub fn run(self) -> Result<()> {
         match self.command {
             Command::Init { shell, key } => {
-                print!("{}", shell::snippet(shell, key));
+                let mut out = io::stdout().lock();
+                out.write_all(shell::snippet(shell, key).as_bytes())?;
+                out.flush()?;
                 Ok(())
             }
             Command::Setup { shell, key, yes } => shell::install(resolve(shell)?, key, yes),
@@ -225,7 +228,11 @@ fn pick(
     match output {
         Some(path) => fs::write(path, result)
             .with_context(|| format!("failed to write {}", path.display()))?,
-        None => print!("{result}"),
+        None => {
+            let mut out = io::stdout().lock();
+            out.write_all(result.as_bytes())?;
+            out.flush()?;
+        }
     }
 
     Ok(())
@@ -350,24 +357,31 @@ fn remove(id: String) -> Result<()> {
     Ok(())
 }
 
+/// Writes the library to stdout.
+///
+/// Through a writer that returns its errors rather than `println!`, which
+/// panics when the reader goes away. `lore list | head` closes the pipe after
+/// ten lines, and that has to end the listing quietly: see `main`.
 fn list(family: ShellFamily) -> Result<()> {
     let library = store::user_library().ok();
     let entries = definitions::load(library.as_deref())?;
 
+    let mut out = io::BufWriter::new(io::stdout().lock());
     for entry in entries.iter().filter(|e| e.cmd_for(family).is_some()) {
-        print(entry, family);
+        print(&mut out, entry, family)?;
     }
+    out.flush()?;
 
     Ok(())
 }
 
-fn print(entry: &Entry, family: ShellFamily) {
+fn print(out: &mut impl Write, entry: &Entry, family: ShellFamily) -> io::Result<()> {
     let cmd = entry.cmd_for(family).expect("caller filtered on this");
     let danger = if entry.danger { "  [destructive]" } else { "" };
 
-    println!("{}{danger}", entry.id);
-    println!("  {}", entry.desc);
-    println!("  {cmd}");
+    writeln!(out, "{}{danger}", entry.id)?;
+    writeln!(out, "  {}", entry.desc)?;
+    writeln!(out, "  {cmd}")?;
 
     for name in crate::params::names(cmd) {
         let desc = entry
@@ -375,14 +389,14 @@ fn print(entry: &Entry, family: ShellFamily) {
             .get(&name)
             .and_then(|spec| spec.desc.as_deref())
             .unwrap_or("no description");
-        println!("    <{name}>  {desc}");
+        writeln!(out, "    <{name}>  {desc}")?;
     }
 
     if !entry.tags.is_empty() {
-        println!("  tags: {}", entry.tags.join(", "));
+        writeln!(out, "  tags: {}", entry.tags.join(", "))?;
     }
 
-    println!();
+    writeln!(out)
 }
 
 #[cfg(test)]

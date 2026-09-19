@@ -24,9 +24,20 @@ fn main() -> ExitCode {
 
     match cli.run() {
         Ok(()) => ExitCode::SUCCESS,
+        // The reader stopped listening, as `lore list | head` does on purpose.
+        // Nothing went wrong and there is nobody left to tell.
+        Err(error) if is_broken_pipe(&error) => ExitCode::SUCCESS,
         Err(error) => {
             console::report(&format!("lore: {error:#}\n"));
             ExitCode::FAILURE
         }
     }
+}
+
+fn is_broken_pipe(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::BrokenPipe)
+    })
 }

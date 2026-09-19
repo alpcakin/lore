@@ -201,3 +201,28 @@ fn saved_id(library: &Path) -> String {
         .find_map(|line| line.trim().strip_prefix("- id: ").map(str::to_string))
         .expect("the saved entry should have an id")
 }
+
+/// `lore list | head` closes the pipe while lore is still writing. That is how
+/// a pipeline says it has had enough, and it must not surface as a panic.
+#[test]
+fn a_reader_that_stops_early_is_not_a_crash() {
+    use std::process::Stdio;
+
+    let sandbox = Sandbox::new("broken-pipe");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lore"))
+        .args(["list", "--shell", "bash"])
+        .env("LORE_CONFIG_DIR", &sandbox.root)
+        .env("LORE_DATA_DIR", &sandbox.root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the binary should run");
+
+    // Closed before lore has written anything, so its first write fails.
+    drop(child.stdout.take());
+
+    let output = child.wait_with_output().expect("the binary should finish");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("panicked"), "lore panicked: {stderr}");
+    assert!(output.status.success(), "lore failed: {stderr}");
+}
