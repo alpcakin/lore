@@ -20,7 +20,7 @@ pub struct Library {
 }
 
 /// A single command a user can pick.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Entry {
     pub id: String,
@@ -42,7 +42,7 @@ pub struct Entry {
 }
 
 /// A command string, optionally specialised per shell family.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum CommandBody {
     Shared(String),
@@ -50,7 +50,7 @@ pub enum CommandBody {
 }
 
 /// Optional metadata for a placeholder used in a command.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ParamSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]

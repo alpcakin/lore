@@ -14,6 +14,7 @@ use crate::shell::{self, Shell};
 use crate::store::definitions::{self, NewEntry, Written};
 use crate::store::stats::{self, Stats};
 use crate::store::{self};
+use crate::sync;
 use crate::tui::{App, Outcome};
 
 /// A command library that lives in your shell.
@@ -132,6 +133,35 @@ enum Command {
         #[arg(long)]
         shell: Option<Shell>,
     },
+
+    /// Keep your library the same on every machine, through a private git
+    /// repository you own. Run with nothing after it to sync now.
+    Sync {
+        #[command(subcommand)]
+        action: Option<SyncAction>,
+
+        /// Sync quietly and record any failure, as the automatic sync after a
+        /// change does.
+        #[arg(long, hide = true)]
+        background: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum SyncAction {
+    /// Connect this machine to a repository. Without an address, a private
+    /// repository is created with the GitHub CLI, or the one an earlier
+    /// machine created is used.
+    Init {
+        /// The repository's address, as you would give it to git clone.
+        url: Option<String>,
+    },
+
+    /// Show where this machine syncs, and when it last did.
+    Status,
+
+    /// Stop syncing on this machine. Your library and the repository stay.
+    Disconnect,
 }
 
 impl Cli {
@@ -170,8 +200,24 @@ impl Cli {
             } => edit(id, family(shell), cmd, desc, tags),
             Command::Rm { id } => remove(id),
             Command::List { shell } => list(family(shell)),
+            Command::Sync { action, background } => run_sync(action, background),
         }
     }
+}
+
+fn run_sync(action: Option<SyncAction>, background: bool) -> Result<()> {
+    match action {
+        Some(SyncAction::Init { url }) => println!("{}", sync::init(url)?.summary()),
+        Some(SyncAction::Status) => sync::status()?,
+        Some(SyncAction::Disconnect) => sync::disconnect()?,
+        // Nobody is watching a background sync. Its failure is recorded for
+        // `lore sync status` and the picker to report, and the exit is clean.
+        None if background => {
+            let _ = sync::run(sync::Mode::Background);
+        }
+        None => println!("{}", sync::run(sync::Mode::Interactive)?.summary()),
+    }
+    Ok(())
 }
 
 fn resolve(shell: Option<Shell>) -> Result<Shell> {
@@ -212,9 +258,18 @@ fn pick(
     let stats = Stats::open(&store::stats_database()?)?;
 
     let history = read_history(history);
-    let app = App::new(entries, family, stats, library, history, stats::now())?;
+    let mut app = App::new(entries, family, stats, library, history, stats::now())?;
+    if let Some(error) = sync::last_error() {
+        app.notice(format!("Sync failed: {error}. Run lore sync"));
+    }
+    sync::refresh_if_stale();
 
-    let Outcome::Insert { command, cursor } = crate::tui::run(app)? else {
+    let outcome = crate::tui::run(&mut app)?;
+    if app.changed() {
+        sync::spawn();
+    }
+
+    let Outcome::Insert { command, cursor } = outcome else {
         return Ok(());
     };
 
@@ -295,6 +350,7 @@ fn save(command: String, desc: Option<String>, tags: Option<String>) -> Result<(
     definitions::append(&library, &entry)?;
 
     println!("Saved as {} in {}", entry.id, library.display());
+    sync::spawn();
     Ok(())
 }
 
@@ -369,6 +425,7 @@ fn edit(
         ),
     }
 
+    sync::spawn();
     Ok(())
 }
 
@@ -393,6 +450,7 @@ fn remove(id: String) -> Result<()> {
     }
 
     Stats::open(&store::stats_database()?)?.forget(&id)?;
+    sync::spawn();
     Ok(())
 }
 

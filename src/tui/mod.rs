@@ -33,10 +33,10 @@ type Screen = Terminal<CrosstermBackend<File>>;
 const HEIGHT: u16 = 17;
 
 /// Runs the picker and returns what the shell should do.
-pub fn run(mut app: App) -> Result<Outcome> {
+pub fn run(app: &mut App) -> Result<Outcome> {
     let mut screen = enter()?;
     let mut top = top_of(&mut screen);
-    let outcome = event_loop(&mut screen, &mut app, &mut top);
+    let outcome = event_loop(&mut screen, app, &mut top);
     leave(&mut screen, top)?;
     outcome
 }

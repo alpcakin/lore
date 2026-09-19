@@ -52,3 +52,18 @@ pub fn stats_database() -> Result<PathBuf> {
 
     Ok(directory.join("stats.db"))
 }
+
+/// lore's own clone of the repository the library syncs through.
+///
+/// In the data directory rather than beside the library, so the user's config
+/// directory never becomes a git checkout they did not ask for, and so the
+/// statistics that live next to the library on some platforms can never be
+/// committed by accident.
+pub fn sync_dir() -> Result<PathBuf> {
+    let directory = match overridden(DATA_DIR) {
+        Some(directory) => directory,
+        None => project_dirs()?.data_dir().to_path_buf(),
+    };
+
+    Ok(directory.join("sync"))
+}

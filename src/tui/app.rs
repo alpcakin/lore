@@ -532,6 +532,11 @@ impl App {
         definitions::merge_tags(given, save.command.trim())
     }
 
+    /// Shows `message` where the hints go until the first key is pressed.
+    pub fn notice(&mut self, message: String) {
+        self.status = Some(message);
+    }
+
     /// Whether anything in the library was written while the picker was open.
     pub fn changed(&self) -> bool {
         self.changed

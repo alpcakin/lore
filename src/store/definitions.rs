@@ -96,6 +96,34 @@ pub struct NewEntry {
     pub danger: bool,
 }
 
+impl From<&Entry> for NewEntry {
+    fn from(entry: &Entry) -> Self {
+        Self {
+            id: entry.id.clone(),
+            cmd: entry.cmd.clone(),
+            desc: entry.desc.clone(),
+            tags: entry.tags.clone(),
+            params: entry.params.clone(),
+            danger: entry.danger,
+        }
+    }
+}
+
+/// Parses the text of a user library, checked the way loading checks it.
+///
+/// An empty text is an empty library rather than an error: a machine that has
+/// never saved anything has no file at all.
+pub fn parse_user(text: &str, origin: &str) -> Result<Library> {
+    if text.trim().is_empty() {
+        return Ok(Library {
+            version: SCHEMA_VERSION,
+            commands: Vec::new(),
+            disabled: Vec::new(),
+        });
+    }
+    read(text, origin, Layer::User)
+}
+
 /// Splits the comma separated tags a user typed into a clean list.
 pub fn parse_tags(text: &str) -> Vec<String> {
     text.split(',')
