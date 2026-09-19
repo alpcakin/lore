@@ -5,6 +5,24 @@ this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-19
+
+### Fixed
+
+- `lore list | head`, or quitting `less` partway through the list, printed a
+  panic about a broken pipe. A reader that stops early now ends the listing
+  quietly, as it would for any other command line tool
+- Search put `git add -A` first for "git st", because its description begins
+  with "Stage". A query spelled out in the command now outranks one borrowed
+  from the description, and a command that begins with the query as typed
+  comes first of all
+
+### Changed
+
+- Ties that usage cannot break yet, which is all of them on a fresh install,
+  go to the shorter command. The picker therefore opens on the basics, such as
+  `df -h`, `ls -lah` and `git diff`, rather than in alphabetical order by id
+
 ## [0.1.1] - 2026-09-18
 
 ### Fixed
@@ -61,6 +79,7 @@ First release.
 - `LORE_CONFIG_DIR` and `LORE_DATA_DIR` to relocate the library and the usage
   statistics, for a portable install
 
-[Unreleased]: https://github.com/alpcakin/lore/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/alpcakin/lore/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/alpcakin/lore/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/alpcakin/lore/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/alpcakin/lore/releases/tag/v0.1.0
