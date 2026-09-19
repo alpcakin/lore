@@ -6,7 +6,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::Write;
 use std::ops::Range;
 use std::path::Path;
 
@@ -21,6 +20,12 @@ const SCHEMA_VERSION: u32 = 1;
 
 /// Top level key holding the ids a layer hides.
 const DISABLED: &str = "disabled:";
+
+/// Top level key holding a layer's entries.
+const COMMANDS: &str = "commands:";
+
+/// How far list items are indented in a file that has none yet.
+const DEFAULT_INDENT: &str = "  ";
 
 macro_rules! builtin {
     ($name:literal) => {
@@ -192,54 +197,63 @@ pub enum Written {
 
 /// Appends an entry to the user's library, creating the file if needed.
 ///
-/// The entry is appended as text rather than re-serialising the whole document,
-/// because users are told to hand edit and version this file. Round tripping it
-/// through a parser would silently delete their comments and reflow everything
-/// they had arranged.
+/// The entry is added as text rather than by re-serialising the whole
+/// document, because users are told to hand edit and version this file. Round
+/// tripping it through a parser would silently delete their comments and
+/// reflow everything they had arranged.
 pub fn append(path: &Path, entry: &NewEntry) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-
-    let existing = fs::read_to_string(path).unwrap_or_default();
-    let mut out = String::new();
-
-    if existing.trim().is_empty() {
-        out.push_str(&format!("version: {SCHEMA_VERSION}\ncommands:\n"));
-    } else {
-        if !existing.ends_with('\n') {
-            out.push('\n');
-        }
-        if !existing.lines().any(|line| line.trim_end() == "commands:") {
-            out.push_str("commands:\n");
-        }
-    }
-
-    out.push_str(&as_list_item(entry)?);
-
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .with_context(|| format!("failed to open {}", path.display()))?;
-    file.write_all(out.as_bytes())
-        .with_context(|| format!("failed to write {}", path.display()))?;
-
-    Ok(())
+    let text = read_or_empty(path)?;
+    write(path, &appended(&text, entry)?)
 }
 
-/// Renders one entry as an indented YAML list item.
+/// `text` with `entry` added as the last item of its `commands` list.
+///
+/// The last item of the list, not the last line of the file. A library whose
+/// `disabled` list comes after its commands, which is what hiding a builtin
+/// produces, would otherwise take the new entry into the disabled list and
+/// stop parsing.
+pub fn appended(text: &str, entry: &NewEntry) -> Result<String> {
+    if text.trim().is_empty() {
+        return Ok(format!(
+            "version: {SCHEMA_VERSION}\n{COMMANDS}\n{}",
+            as_list_item(entry, DEFAULT_INDENT)?
+        ));
+    }
+
+    let mut lines: Vec<String> = text.lines().map(String::from).collect();
+    let Some(key) = open_list(&mut lines, COMMANDS)? else {
+        lines.push(COMMANDS.to_string());
+        let mut out = joined(&lines);
+        out.push_str(&as_list_item(entry, DEFAULT_INDENT)?);
+        return Ok(out);
+    };
+
+    let end = end_of_section(&lines, key);
+    let indent = item_indent(&lines[key + 1..end]).unwrap_or(DEFAULT_INDENT.to_string());
+    let item = as_list_item(entry, &indent)?;
+
+    // After the last line that belongs to the list, so blank lines and a
+    // comment introducing whatever comes next stay with it.
+    let mut at = end;
+    while at > key + 1 && belongs_to_next(&lines[at - 1]) {
+        at -= 1;
+    }
+    lines.splice(at..at, item.lines().map(String::from));
+
+    Ok(joined(&lines))
+}
+
+/// Renders one entry as a YAML list item indented by `indent`.
 ///
 /// The body is produced by the serialiser so that quoting and escaping are
 /// correct, then indented into place.
-fn as_list_item(entry: &NewEntry) -> Result<String> {
+fn as_list_item(entry: &NewEntry, indent: &str) -> Result<String> {
     let body = serde_yaml_ng::to_string(entry).context("failed to serialise the entry")?;
 
     let mut out = String::new();
     for (index, line) in body.lines().enumerate() {
-        let prefix = if index == 0 { "  - " } else { "    " };
-        out.push_str(prefix);
+        out.push_str(indent);
+        out.push_str(if index == 0 { "- " } else { "  " });
         out.push_str(line);
         out.push('\n');
     }
@@ -256,12 +270,18 @@ pub fn remove(path: &Path, id: &str) -> Result<bool> {
     let text =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
 
-    let Some(block) = item_of(&text, id) else {
-        return Ok(false);
-    };
+    match removed(&text, id) {
+        Some(text) => {
+            write(path, &text)?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
 
-    write(path, &splice(&text, block, ""))?;
-    Ok(true)
+/// `text` without the entry declared as `id`, or `None` if there is none.
+pub fn removed(text: &str, id: &str) -> Option<String> {
+    item_of(text, id).map(|block| splice(text, block, ""))
 }
 
 /// Writes an entry into the user's library, replacing one already declared
@@ -275,17 +295,23 @@ pub fn remove(path: &Path, id: &str) -> Result<bool> {
 /// here under its own id is enough: the loader shadows by id, so the user's
 /// copy wins.
 pub fn upsert(path: &Path, entry: &NewEntry) -> Result<Written> {
-    let text = fs::read_to_string(path).unwrap_or_default();
+    let text = read_or_empty(path)?;
+    let (text, written) = upserted(&text, entry)?;
+    write(path, &text)?;
+    Ok(written)
+}
 
-    match item_of(&text, &entry.id) {
+/// `text` with `entry` in place of the one declared under its id, or added to
+/// the end of the list when there is none.
+pub fn upserted(text: &str, entry: &NewEntry) -> Result<(String, Written)> {
+    match item_of(text, &entry.id) {
         Some(block) => {
-            write(path, &splice(&text, block, &as_list_item(entry)?))?;
-            Ok(Written::Replaced)
+            let lines: Vec<&str> = text.lines().collect();
+            let indent = lines[block.start][..indent_of(lines[block.start])].to_string();
+            let item = as_list_item(entry, &indent)?;
+            Ok((splice(text, block, &item), Written::Replaced))
         }
-        None => {
-            append(path, entry)?;
-            Ok(Written::Appended)
-        }
+        None => Ok((appended(text, entry)?, Written::Appended)),
     }
 }
 
@@ -306,36 +332,146 @@ fn splice(text: &str, block: Range<usize>, replacement: &str) -> String {
     out
 }
 
+fn read_or_empty(path: &Path) -> Result<String> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
+    }
+}
+
 fn write(path: &Path, text: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
     fs::write(path, text).with_context(|| format!("failed to write {}", path.display()))
 }
 
 /// Hides an entry the user cannot delete, such as one compiled into the binary.
 pub fn disable(path: &Path, id: &str) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
+    let text = read_or_empty(path)?;
+    write(path, &with_disabled(&text, id)?)
+}
 
-    let text = fs::read_to_string(path).unwrap_or_default();
+/// `text` with `pattern` added to its `disabled` list.
+pub fn with_disabled(text: &str, pattern: &str) -> Result<String> {
     let mut lines: Vec<String> = text.lines().map(String::from).collect();
 
-    match lines.iter().position(|line| line.trim_end() == DISABLED) {
-        Some(at) => lines.insert(at + 1, format!("  - {id}")),
+    match open_list(&mut lines, DISABLED)? {
+        Some(key) => {
+            let end = end_of_section(&lines, key);
+            let indent = item_indent(&lines[key + 1..end]).unwrap_or(DEFAULT_INDENT.to_string());
+            lines.insert(key + 1, format!("{indent}- {pattern}"));
+        }
         None => {
             if text.trim().is_empty() {
                 lines.push(format!("version: {SCHEMA_VERSION}"));
             }
             lines.push(DISABLED.to_string());
-            lines.push(format!("  - {id}"));
+            lines.push(format!("{DEFAULT_INDENT}- {pattern}"));
         }
     }
 
-    let mut out = lines.join("\n");
-    out.push('\n');
-    fs::write(path, out).with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(joined(&lines))
+}
 
-    Ok(())
+/// `text` with `pattern` taken off its `disabled` list, if it was on it.
+pub fn with_enabled(text: &str, pattern: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(key) = lines.iter().position(|line| is_key(line, DISABLED)) else {
+        return text.to_string();
+    };
+    let end = end_of_section_of(&lines, key);
+
+    let kept: Vec<String> = lines
+        .iter()
+        .enumerate()
+        .filter(|(number, line)| {
+            !(*number > key
+                && *number < end
+                && line
+                    .trim()
+                    .strip_prefix("- ")
+                    .is_some_and(|value| unquote(value.trim()) == pattern))
+        })
+        .map(|(_, line)| line.to_string())
+        .collect();
+
+    joined(&kept)
+}
+
+/// Where the list under the top level `key` starts, turning `key: []` into an
+/// open list first so that items can go under it.
+fn open_list(lines: &mut [String], key: &str) -> Result<Option<usize>> {
+    let Some(at) = lines.iter().position(|line| is_key(line, key)) else {
+        return Ok(None);
+    };
+
+    let rest = lines[at][key.len()..].trim();
+    // A comment after the key says nothing about the list.
+    let rest = if rest.starts_with('#') { "" } else { rest };
+    match rest {
+        "" => {}
+        "[]" => lines[at] = key.to_string(),
+        _ => bail!(
+            "`{}` is written on one line, add to it by hand",
+            lines[at].trim()
+        ),
+    }
+    Ok(Some(at))
+}
+
+/// Whether `line` is the top level `key`, such as `commands:`.
+fn is_key(line: &str, key: &str) -> bool {
+    line.starts_with(key)
+}
+
+/// The line after the last one belonging to the section opened at `key`.
+fn end_of_section(lines: &[String], key: usize) -> usize {
+    let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+    end_of_section_of(&lines, key)
+}
+
+fn end_of_section_of(lines: &[&str], key: usize) -> usize {
+    lines
+        .iter()
+        .enumerate()
+        .skip(key + 1)
+        .find(|(_, line)| starts_top_level(line))
+        .map_or(lines.len(), |(at, _)| at)
+}
+
+/// A line that opens a new top level key rather than continuing a list.
+///
+/// A list may be written flush with the margin, so a line starting with `-`
+/// still belongs to it, as does a comment.
+fn starts_top_level(line: &str) -> bool {
+    !line.is_empty() && indent_of(line) == 0 && !line.starts_with('-') && !line.starts_with('#')
+}
+
+/// Blank lines and margin comments at the end of a section introduce what
+/// follows it rather than closing what came before.
+fn belongs_to_next(line: &str) -> bool {
+    line.trim().is_empty() || line.starts_with('#')
+}
+
+/// How far the list's items are indented, from the first one there is.
+fn item_indent<S: AsRef<str>>(lines: &[S]) -> Option<String> {
+    lines
+        .iter()
+        .map(AsRef::as_ref)
+        .find(|line| line.trim_start().starts_with("- "))
+        .map(|line| line[..indent_of(line)].to_string())
+}
+
+fn joined<S: AsRef<str>>(lines: &[S]) -> String {
+    let mut out = String::new();
+    for line in lines {
+        out.push_str(line.as_ref());
+        out.push('\n');
+    }
+    out
 }
 
 /// The lines occupied by the list item that declares `id`.
@@ -572,6 +708,94 @@ mod tests {
 
     /// The interface is ASCII only: a legacy Windows console runs on the system
     /// code page, where anything else arrives as mojibake.
+    fn echo_entry(id: &str) -> NewEntry {
+        new_entry(id, &format!("echo {id}"))
+    }
+
+    fn ids_in(text: &str) -> Vec<String> {
+        read(text, "test", Layer::User)
+            .expect("the text should still be a valid library")
+            .commands
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect()
+    }
+
+    /// What every released version up to 0.1.2 did: hiding a builtin puts a
+    /// disabled list at the end of the file, and the next save went into it.
+    #[test]
+    fn a_new_entry_goes_into_the_commands_list_even_when_it_is_not_last() {
+        let text = "version: 1\ncommands:\n  - id: one\n    cmd: echo one\n    desc: One\ndisabled:\n  - git.status\n";
+        let text = appended(text, &echo_entry("two")).unwrap();
+
+        assert_eq!(ids_in(&text), ["one", "two"]);
+        assert!(
+            text.ends_with("disabled:\n  - git.status\n"),
+            "wrote {text}"
+        );
+    }
+
+    #[test]
+    fn a_comment_introducing_the_next_section_stays_with_it() {
+        let text = "version: 1\ncommands:\n  - id: one\n    cmd: echo one\n    desc: One\n\n# builtins I never use\ndisabled:\n  - docker.*\n";
+        let text = appended(text, &echo_entry("two")).unwrap();
+
+        assert_eq!(ids_in(&text), ["one", "two"]);
+        assert!(
+            text.contains("- saved\n\n# builtins I never use\ndisabled:"),
+            "wrote {text}"
+        );
+    }
+
+    #[test]
+    fn a_list_written_flush_with_the_margin_stays_that_way() {
+        let text = "version: 1\ncommands:\n- id: one\n  cmd: echo one\n  desc: One\n";
+        let text = appended(text, &echo_entry("two")).unwrap();
+
+        assert_eq!(ids_in(&text), ["one", "two"]);
+        assert!(text.contains("\n- id: two\n"), "wrote {text}");
+    }
+
+    #[test]
+    fn an_empty_inline_list_is_opened_up() {
+        let text = appended("version: 1\ncommands: []\n", &echo_entry("one")).unwrap();
+        assert_eq!(ids_in(&text), ["one"]);
+    }
+
+    #[test]
+    fn a_file_with_no_commands_key_gains_one() {
+        let text = appended("version: 1\ndisabled:\n  - x\n", &echo_entry("one")).unwrap();
+        assert_eq!(ids_in(&text), ["one"]);
+    }
+
+    #[test]
+    fn replacing_keeps_the_indentation_the_file_uses() {
+        let text = "version: 1\ncommands:\n- id: one\n  cmd: echo one\n  desc: One\n";
+        let mut entry = echo_entry("one");
+        entry.desc = "Changed".to_string();
+
+        let (text, written) = upserted(text, &entry).unwrap();
+        assert_eq!(written, Written::Replaced);
+        assert!(text.contains("\n- id: one\n"), "wrote {text}");
+        assert!(text.contains("desc: Changed"), "wrote {text}");
+    }
+
+    #[test]
+    fn hiding_then_unhiding_leaves_the_file_as_it_was() {
+        let original = "version: 1\ncommands:\n  - id: one\n    cmd: echo one\n    desc: One\ndisabled:\n  - docker.*\n";
+        let hidden = with_disabled(original, "git.status").unwrap();
+        assert!(hidden.contains("  - git.status\n"), "wrote {hidden}");
+
+        assert_eq!(with_enabled(&hidden, "git.status"), original);
+    }
+
+    #[test]
+    fn unhiding_something_never_hidden_changes_nothing() {
+        let original =
+            "version: 1\ncommands:\n  - id: git.status\n    cmd: git status\n    desc: S\n";
+        assert_eq!(with_enabled(original, "git.status"), original);
+    }
+
     #[test]
     fn hashtags_in_the_purpose_become_tags() {
         assert_eq!(
