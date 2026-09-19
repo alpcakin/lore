@@ -3,6 +3,9 @@
 Thank you for taking the time. Bug reports, new builtin commands and fixes are
 all welcome. This page covers what you need to get a change merged.
 
+Everyone taking part is expected to follow the
+[code of conduct](CODE_OF_CONDUCT.md).
+
 ## Reporting a bug
 
 Open an issue with the **Bug report** form. The two things that make a report
