@@ -1,0 +1,30 @@
+name: Suggest a command
+description: A command that belongs in the library that ships with lore
+labels: [builtins]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The library holds the commands people reach for every week. A good
+        candidate is one you have had to look up more than once.
+  - type: input
+    id: command
+    attributes:
+      label: The command
+      description: Write placeholders as `<name>`, or `<name:default>` when there is a sensible default.
+      placeholder: git stash pop
+    validations:
+      required: true
+  - type: input
+    id: purpose
+    attributes:
+      label: What it is for
+      description: In the words you would search with if you had forgotten the command.
+      placeholder: Bring back the changes you last put aside
+    validations:
+      required: true
+  - type: textarea
+    id: windows
+    attributes:
+      label: PowerShell equivalent
+      description: If the command does not exist on Windows, and you know one that does the same.

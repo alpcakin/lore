@@ -258,12 +258,9 @@ library you built; keep it if you might come back.
 
 ## Contributing
 
-Bug reports and pull requests are welcome on
-[GitHub](https://github.com/alpcakin/lore). A new builtin belongs in the file
-under `assets/builtins` that matches its tool, described by what it is for, with
-the tags someone would search for and a `powershell` variant when the posix
-command does not exist there. Keep the interface ASCII only: a legacy Windows
-console shows anything else as mojibake, and a test enforces it.
+Bug reports, suggested commands and pull requests are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to build and test, and what makes a
+good builtin command.
 
 ## Licence
 
