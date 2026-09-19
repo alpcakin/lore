@@ -99,13 +99,25 @@ Inside the picker:
 | type     | Filter by command, description or tags              |
 | `enter`  | Put the command in your prompt                      |
 | `esc`    | Close and leave the prompt alone                    |
-| `ctrl+s` | Save a command you just ran                         |
+| `ctrl+s` | Save the command on your prompt, or one you ran     |
 | `ctrl+e` | Edit the selected entry                             |
 | `ctrl+p` | Pin an entry to the top                             |
 | `ctrl+x` | Remove an entry, confirmed by pressing it again     |
 
-On the save and edit screens, `ctrl+s` submits from whichever field you are in,
-so you never have to walk the rest of them to finish.
+Saving asks two things, one line at a time:
+
+```
+save: docker compose logs -f api
+ for: Follow the api logs #debug
+```
+
+The command starts as whatever you had typed at the prompt, or the last command
+you ran, and up and down walk back through your history the way they do in the
+shell. Then say what it is for, in the words you would search with. Any word
+written as `#tag` becomes a tag, and the program and its subcommands, here
+`docker`, `compose` and `logs`, are added as tags on their own.
+
+On the edit screen, `ctrl+s` saves from whichever field you are in.
 
 lore never runs anything. It puts the command in your prompt and pressing enter
 stays your decision.
@@ -118,7 +130,8 @@ for the values and remember what you typed last time.
 Nothing here needs the picker:
 
 ```
-lore save "kubectl logs -f <pod>" --desc "Follow a pod's logs" --tags k8s,logs
+lore save "kubectl logs -f <pod>" --desc "Follow a pod's logs #k8s"
+lore save "terraform plan"          # asks what it is for
 lore list --shell bash
 lore edit k8s.logs.follow --desc "Tail a pod"
 lore rm k8s.logs.follow
@@ -155,6 +168,59 @@ terminal when it has to.
 Upgrading the binary is enough for most changes, since the snippet is fetched
 from it on every shell start. When the release notes say to run `lore setup`
 again, the one line in the profile itself changed.
+
+## Using lore on more than one machine
+
+Your library can follow you to a second laptop, a work machine or a server,
+through a private git repository that you own. Nothing is sent anywhere else,
+and this is optional: lore works fully on one machine without it.
+
+With the [GitHub CLI](https://cli.github.com) installed and logged in, run this
+on each machine:
+
+```
+lore sync init
+```
+
+The first time, it creates a private repository called `lore-library` on your
+GitHub account. On every other machine it finds that repository and connects to
+it. Without the GitHub CLI, create an empty private repository on any git host
+and give its address instead:
+
+```
+lore sync init git@github.com:you/lore-library.git
+```
+
+After that there is nothing to remember. Every save, edit and removal is synced
+in the background, and the picker fetches other machines' changes when it has
+not done so for a while. To sync right away, or to see why a sync failed:
+
+```
+lore sync
+lore sync status
+```
+
+lore runs your own `git`, so it uses whatever login `git push` already uses, and
+never sees a password or token. On a server, that means the server needs access
+to the repository, for example through an SSH key.
+
+Two machines can save at the same time without a merge conflict. lore merges by
+entry rather than by line, so new commands from both are kept. If the same
+entry was edited differently on two machines, the version synced first keeps
+its id and the other is kept as a copy, such as `user.deploy-2`, and the sync
+says so.
+
+Only the library is synced. Which commands you use most is kept per machine.
+
+Keep the repository private. Saved commands often contain server names, user
+names and internal addresses.
+
+To stop syncing on a machine, run `lore sync disconnect`. Your library stays,
+and so does the repository. Set `LORE_NO_AUTO_SYNC=1` to sync only when you run
+`lore sync` yourself.
+
+If you would rather not use git at all, point `LORE_CONFIG_DIR` at a folder
+that Dropbox, iCloud Drive or OneDrive already syncs.
 
 ## Your library
 
@@ -214,10 +280,18 @@ both have to pass, and CI runs them on Linux, macOS and Windows.
 
 ## Uninstall
 
-Three things were put on your machine: a line in your shell profile, the
-binary, and your library. Each is removed on its own.
+Up to four things were put on your machine: a sync connection if you made one,
+a line in your shell profile, the binary, and your library. Each is removed on
+its own.
 
-**1. The shell integration**
+**1. Sync**, if you set it up. This leaves the repository and your library
+alone:
+
+```
+lore sync disconnect
+```
+
+**2. The shell integration**
 
 ```
 lore uninstall
@@ -232,7 +306,7 @@ If you set up more than one shell, run it once per shell with `--shell bash`,
 `--shell zsh`, `--shell fish` or `--shell powershell`. Do this before removing
 the binary, since it is the binary that knows where the profile is.
 
-**2. The binary**, depending on how you installed it:
+**3. The binary**, depending on how you installed it:
 
 | Installed with       | Remove with                                                      |
 |----------------------|------------------------------------------------------------------|
@@ -246,7 +320,7 @@ the binary, since it is the binary that knows where the profile is.
 Removing the tap or the bucket only makes Homebrew or Scoop forget where lore
 came from. Leave it if you might install again.
 
-**3. Your library and statistics**, only if you want them gone. They are the
+**4. Your library and statistics**, only if you want them gone. They are the
 files listed under [Your library](#your-library). `commands.yaml` is the
 library you built; keep it if you might come back.
 

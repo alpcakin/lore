@@ -42,7 +42,8 @@ cargo test --all-targets
 ```
 
 CI runs them on Linux, macOS and Windows, and checks the minimum Rust version
-separately.
+separately. The sync tests need `git` on your PATH; they use a repository on
+disk, so they need no network and no GitHub account.
 
 ## Adding a builtin command
 

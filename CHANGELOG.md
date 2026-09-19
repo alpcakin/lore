@@ -5,6 +5,36 @@ this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-19
+
+### Added
+
+- Sync across machines through a private git repository you own.
+  `lore sync init` connects a machine, creating the repository with the GitHub
+  CLI when it is available. After that every save, edit and removal syncs in
+  the background, and the picker fetches other machines' changes when it has
+  not for a while. lore merges by entry rather than by line, so two machines
+  saving at once never produce a merge conflict. `lore sync`, `lore sync
+  status` and `lore sync disconnect` do what they say, and
+  `LORE_NO_AUTO_SYNC` turns the automatic part off
+
+### Changed
+
+- Saving no longer opens a form. It asks for the command and then what it is
+  for, one line at a time, starting from whatever was typed at the prompt when
+  the picker opened. Up and down walk the shell history. Words written as
+  `#tag` become tags, and the program and its subcommands are added as tags
+  without being asked for
+- `lore save` asks what the command is for when `--desc` is left out, and adds
+  tags from the command the same way
+
+### Fixed
+
+- Hiding a builtin and then saving a new command wrote the new entry into the
+  list of hidden builtins, after which every lore command failed until the
+  library was fixed by hand. New entries now always go into the commands list
+
+
 ## [0.1.2] - 2026-09-19
 
 ### Fixed
@@ -79,7 +109,8 @@ First release.
 - `LORE_CONFIG_DIR` and `LORE_DATA_DIR` to relocate the library and the usage
   statistics, for a portable install
 
-[Unreleased]: https://github.com/alpcakin/lore/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/alpcakin/lore/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/alpcakin/lore/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/alpcakin/lore/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/alpcakin/lore/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/alpcakin/lore/releases/tag/v0.1.0
