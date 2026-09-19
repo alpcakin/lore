@@ -1,13 +1,13 @@
 {
-    "version": "0.1.2",
+    "version": "0.2.0",
     "description": "A command library that lives in your shell",
     "homepage": "https://github.com/alpcakin/lore",
     "license": "MIT OR Apache-2.0",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/alpcakin/lore/releases/download/v0.1.2/lore-v0.1.2-x86_64-pc-windows-msvc.zip",
-            "hash": "1cf95bfd3c831ca6c23823501a733884bee169abe487659e39649b1f5f287d99",
-            "extract_dir": "lore-v0.1.2-x86_64-pc-windows-msvc"
+            "url": "https://github.com/alpcakin/lore/releases/download/v0.2.0/lore-v0.2.0-x86_64-pc-windows-msvc.zip",
+            "hash": "b43aad610f2acaab458eca7e1d94613e8ee58d57436756ad3e73cac0f33af56f",
+            "extract_dir": "lore-v0.2.0-x86_64-pc-windows-msvc"
         }
     },
     "bin": "lore.exe",
