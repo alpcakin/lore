@@ -8,15 +8,15 @@ use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::model::Layer;
 use crate::params;
-use crate::search;
-use crate::tui::app::{App, Mode};
-use crate::tui::form::{Choice, Field, Form, Picker};
+use crate::tui::app::{App, Mode, Save, SaveStep};
+use crate::tui::form::{Field, Form};
 
 // The interface stays ASCII only. A legacy Windows console runs on the
 // system code page, where box drawing characters arrive as mojibake.
 const RULE: &str = "-";
 const PROMPT: &str = "find: ";
-const FILTER: &str = "filter: ";
+const SAVE_LABEL: &str = "save: ";
+const PURPOSE_LABEL: &str = " for: ";
 const SELECTED: &str = "> ";
 const UNSELECTED: &str = "  ";
 const GAP: &str = "   ";
@@ -91,17 +91,10 @@ pub fn draw(app: &App, frame: &mut Frame) {
             draw_query(app, frame, heading);
             draw_browse(app, frame, body);
         }
-        Mode::Params { form, .. } | Mode::Save { form } | Mode::Edit { form, .. } => {
-            match &form.picking {
-                Some(picker) => {
-                    draw_title(&picker.title, frame, heading);
-                    draw_picker(form, picker, frame, body);
-                }
-                None => {
-                    draw_title(&form.title, frame, heading);
-                    draw_form(form, frame, body);
-                }
-            }
+        Mode::Save(save) => draw_save(app, save, frame, heading, body),
+        Mode::Params { form, .. } | Mode::Edit { form, .. } => {
+            draw_title(&form.title, frame, heading);
+            draw_form(form, frame, body);
         }
     }
 }
@@ -452,87 +445,67 @@ fn tail(text: &str, width: usize) -> String {
     }
 }
 
-/// The values the focused field is offering, with the filter above them.
-fn draw_picker(form: &Form, picker: &Picker, frame: &mut Frame, area: Rect) {
-    let [filter, rule, list] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Min(1),
-    ])
-    .areas(area);
+/// Saving, drawn as a short exchange at a prompt rather than as a form.
+///
+/// The command sits on the heading row where the query was, labelled the way
+/// the query is. Once it is settled, the question takes the row below, and the
+/// tags the entry will get are shown under the answer as it is typed, so
+/// nothing about the saved entry is a surprise.
+fn draw_save(app: &App, save: &Save, frame: &mut Frame, heading: Rect, body: Rect) {
+    let on_command = save.step == SaveStep::Command;
+    frame.render_widget(
+        Paragraph::new(prompt_line(SAVE_LABEL, &save.command, on_command)),
+        heading,
+    );
 
-    let typed = Line::from(vec![
-        Span::styled(FILTER, Style::new().fg(Color::Cyan)),
-        Span::styled(
-            picker.filter.clone(),
-            Style::new().add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(RAIL, dim()),
-    ]);
-    frame.render_widget(Paragraph::new(typed), filter);
-    draw_rule(frame, rule);
+    let mut lines = Vec::new();
+    if on_command {
+        let note = if save.command.trim().is_empty() {
+            "type a command, or press up for the ones you ran"
+        } else if app.is_saved(&save.command) {
+            "already in your library"
+        } else {
+            match save.recalled {
+                Some(0) => "the newest command your shell has",
+                Some(_) => "from your shell history",
+                None => "",
+            }
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{}{note}", " ".repeat(SAVE_LABEL.len())),
+            dim(),
+        )));
+    } else {
+        lines.push(prompt_line(PURPOSE_LABEL, &save.purpose, true));
 
-    let choices = form.visible();
-    if choices.is_empty() {
-        let empty = Paragraph::new(Span::styled("Nothing matches that filter", dim()));
-        frame.render_widget(empty, list);
-        return;
+        let tags = app.save_tags();
+        let tags = if tags.is_empty() {
+            "none yet, add some with #tag".to_string()
+        } else {
+            tags.join(", ")
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{}tags: {tags}", " ".repeat(PURPOSE_LABEL.len())),
+            dim(),
+        )));
     }
 
-    let height = list.height as usize;
-    let first = picker.selected.saturating_sub(height.saturating_sub(1));
-    let room = (list.width as usize).saturating_sub(SELECTED.len());
-
-    let lines: Vec<Line> = choices
-        .into_iter()
-        .enumerate()
-        .skip(first)
-        .take(height)
-        .map(|(index, choice)| choice_line(choice, index == picker.selected, &picker.filter, room))
-        .collect();
-
-    frame.render_widget(Paragraph::new(lines), list);
+    frame.render_widget(Paragraph::new(lines), body);
 }
 
-/// One offered value, with whatever the caller had to say about it held to the
-/// right of the row.
-fn choice_line(choice: &Choice, selected: bool, filter: &str, room: usize) -> Line<'static> {
-    let base = if selected {
-        Style::new().fg(SELECTION)
-    } else {
-        Style::new()
-    };
-    let accent = if selected {
-        base.add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-    } else {
-        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-    };
-
-    let note = choice.note.clone().unwrap_or_default();
-    let width = room.saturating_sub(if note.is_empty() {
-        0
-    } else {
-        note.chars().count() + GAP.len()
-    });
-
-    let value = truncate(&choice.value, width);
-    let padding = width - value.chars().count();
-    let matched = search::highlight(&value, filter);
-
-    let mut spans = vec![Span::styled(
-        if selected { SELECTED } else { UNSELECTED },
-        base,
-    )];
-    spans.extend(highlighted(&value, &matched, base, accent));
-
-    if !note.is_empty() {
-        spans.push(Span::raw(" ".repeat(padding)));
+/// A labelled line of text in the style of the query, with a caret when it is
+/// the one being typed into.
+fn prompt_line(label: &'static str, text: &str, active: bool) -> Line<'static> {
+    let mut spans = vec![Span::styled(label, Style::new().fg(Color::Cyan))];
+    if active {
         spans.push(Span::styled(
-            format!("{GAP}{note}"),
-            if selected { base } else { dim() },
+            text.to_string(),
+            Style::new().add_modifier(Modifier::BOLD),
         ));
+        spans.push(Span::styled("_", dim()));
+    } else {
+        spans.push(Span::raw(text.to_string()));
     }
-
     Line::from(spans)
 }
 
@@ -571,13 +544,22 @@ fn draw_hints(app: &App, frame: &mut Frame, area: Rect) {
 fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
     match app.mode() {
         Mode::Browse => browse_hints(),
-        Mode::Params { form, .. } | Mode::Save { form } | Mode::Edit { form, .. }
-            if form.picking.is_some() =>
-        {
-            picker_hints()
-        }
         Mode::Params { .. } => form_hints("back"),
-        Mode::Save { .. } | Mode::Edit { .. } => saving_hints(),
+        Mode::Save(save) => save_hints(save.step),
+        Mode::Edit { .. } => saving_hints(),
+    }
+}
+
+/// Up means something different on each line of a save, so the line says which.
+fn save_hints(step: SaveStep) -> Vec<(&'static str, &'static str)> {
+    match step {
+        SaveStep::Command => vec![("enter", "next"), ("up", "history"), ("esc", "cancel")],
+        SaveStep::Purpose => vec![
+            ("enter", "save"),
+            ("up", "back"),
+            ("#word", "tag"),
+            ("esc", "cancel"),
+        ],
     }
 }
 
@@ -605,13 +587,6 @@ fn saving_hints() -> Vec<(&'static str, &'static str)> {
     let mut hints = form_hints("cancel");
     hints.push(("^s", "save"));
     hints
-}
-
-/// `^u` still empties the filter, as it does every other line of text, but it
-/// is left off the line: browsing offers it no more than this does, and `clear`
-/// above a list of commands reads as an offer to throw the list away.
-fn picker_hints() -> Vec<(&'static str, &'static str)> {
-    vec![("enter", "use"), ("esc", "back"), ("type", "filter")]
 }
 
 fn dim() -> Style {
@@ -744,7 +719,8 @@ mod tests {
             browse_hints(),
             form_hints("back"),
             saving_hints(),
-            picker_hints(),
+            save_hints(SaveStep::Command),
+            save_hints(SaveStep::Purpose),
         ];
 
         for hints in lines {
@@ -804,40 +780,5 @@ mod tests {
         assert_eq!(rail_width(500), RAIL_MAX);
         assert!(rail_width(30) < RAIL_MAX);
         assert!(rail_width(0) >= 1);
-    }
-
-    fn choice(note: Option<&str>) -> Choice {
-        Choice::new("git log --oneline", note.map(str::to_string))
-    }
-
-    #[test]
-    fn a_choice_carries_its_note_at_the_end_of_the_row() {
-        let line = choice_line(&choice(Some("already saved")), false, "", 40);
-        let drawn = drawn(&line);
-
-        assert!(
-            drawn.starts_with("  git log --oneline"),
-            "drawn as {drawn:?}"
-        );
-        assert!(drawn.ends_with("already saved"), "drawn as {drawn:?}");
-    }
-
-    /// The same rule the list follows: one colour from end to end, so the eye
-    /// does not travel the gap to pair a row with its note.
-    #[test]
-    fn the_selected_choice_is_one_colour_throughout() {
-        let line = choice_line(&choice(Some("already saved")), true, "", 40);
-
-        for span in &line.spans {
-            if span.content.trim().is_empty() {
-                continue;
-            }
-            assert_eq!(
-                span.style.fg,
-                Some(SELECTION),
-                "{:?} is not part of the selected colour",
-                span.content
-            );
-        }
     }
 }

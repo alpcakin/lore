@@ -6,9 +6,15 @@ __lore_pick() {
     # backslash takes the next one with it. Every shell hands it over the same
     # way. A multi-line command still arrives as one entry per line, which fc
     # gives no way around.
+    #
+    # Whatever is on the prompt line goes first, so saving offers a command
+    # typed but not yet run ahead of the ones that were.
     recent="$(mktemp)"
     out="$(mktemp)"
-    fc -lnr -50 2>/dev/null | sed 's/^[[:space:]]*//' > "$recent"
+    {
+        [[ -n "$BUFFER" ]] && print -r -- "$BUFFER"
+        fc -lnr -50 2>/dev/null | sed 's/^[[:space:]]*//'
+    } > "$recent"
 
     # Deliberately not a command substitution. The picker draws a panel under
     # the prompt, which means asking the terminal where the cursor is, and that

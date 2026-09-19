@@ -93,11 +93,12 @@ enum Command {
     Save {
         command: String,
 
-        /// What the command is for. This is how you will find it again.
+        /// What the command is for. This is how you will find it again. Asked
+        /// for when omitted. Words written as #tag become tags.
         #[arg(long)]
-        desc: String,
+        desc: Option<String>,
 
-        /// Comma separated keywords.
+        /// Comma separated keywords, on top of the ones taken from the command.
         #[arg(long)]
         tags: Option<String>,
     },
@@ -254,7 +255,26 @@ fn read_history(path: Option<&Path>) -> Vec<String> {
         .collect()
 }
 
-fn save(command: String, desc: String, tags: Option<String>) -> Result<()> {
+fn save(command: String, desc: Option<String>, tags: Option<String>) -> Result<()> {
+    let command = command.trim().to_string();
+    if command.is_empty() {
+        bail!("nothing to save, the command is empty");
+    }
+
+    let purpose = match desc {
+        Some(desc) => desc,
+        None => ask("What is it for? ")?,
+    };
+    let (desc, mut given) = definitions::split_purpose(&purpose);
+    if desc.is_empty() {
+        bail!("say what the command is for, so you can find it later");
+    }
+    for tag in definitions::parse_tags(&tags.unwrap_or_default()) {
+        if !given.contains(&tag) {
+            given.push(tag);
+        }
+    }
+
     let library = store::user_library()?;
     let taken: BTreeSet<String> = definitions::load(Some(&library))?
         .into_iter()
@@ -263,9 +283,9 @@ fn save(command: String, desc: String, tags: Option<String>) -> Result<()> {
 
     let entry = NewEntry {
         id: definitions::suggest_id(&command, &taken),
+        tags: definitions::merge_tags(given, &command),
         cmd: CommandBody::Shared(command),
         desc,
-        tags: definitions::parse_tags(&tags.unwrap_or_default()),
         params: BTreeMap::new(),
         danger: false,
     };
@@ -276,6 +296,25 @@ fn save(command: String, desc: String, tags: Option<String>) -> Result<()> {
 
     println!("Saved as {} in {}", entry.id, library.display());
     Ok(())
+}
+
+/// Asks one question on one line, the way a shell script would.
+///
+/// Refuses rather than waiting when there is nobody to answer, so a script
+/// that forgot an argument fails instead of hanging.
+fn ask(question: &str) -> Result<String> {
+    use std::io::IsTerminal;
+
+    if !io::stdin().is_terminal() {
+        bail!("pass --desc to say what the command is for");
+    }
+
+    print!("{question}");
+    io::stdout().flush()?;
+
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    Ok(answer.trim().to_string())
 }
 
 /// Applies the given changes to an entry, leaving every other field alone.

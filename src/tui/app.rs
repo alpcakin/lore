@@ -12,19 +12,16 @@ use crate::params;
 use crate::search::{self, Candidate};
 use crate::store::definitions::{self, NewEntry};
 use crate::store::stats::{Score, Stats};
-use crate::tui::form::{Choice, Field, Form};
+use crate::tui::form::{Field, Form};
 
-/// Commands from the shell's history the save screen offers.
+/// Shown when saving is asked to go on without a command.
+const NO_COMMAND: &str = "Type a command, or press up for the ones you ran";
+
+/// Commands from the shell's history that saving can walk back through.
 ///
-/// Deep enough to reach past a run of throwaway commands, short enough that the
-/// list stays something you scan rather than search.
+/// Deep enough to reach past a run of throwaway commands, as a shell's own up
+/// arrow would.
 const HISTORY_LIMIT: usize = 50;
-
-/// Heading over the shell history when it is being browsed.
-const HISTORY_TITLE: &str = "Recent commands";
-
-/// Note against a history entry the library already holds.
-const ALREADY_SAVED: &str = "already saved";
 
 /// What the picker hands back to the shell.
 #[derive(Debug, PartialEq, Eq)]
@@ -57,9 +54,7 @@ pub enum Mode {
         template: String,
         form: Form,
     },
-    Save {
-        form: Form,
-    },
+    Save(Save),
     /// Rewriting an entry in place. Everything the form does not show is
     /// carried through untouched, so editing a description cannot lose a
     /// per shell variant or a placeholder's documentation.
@@ -73,6 +68,34 @@ pub enum Mode {
         shadowing: bool,
         form: Form,
     },
+}
+
+/// Saving a command, asked the way a shell would ask it: the command on one
+/// line, then what it is for on the next. There is no form to fill in, and
+/// tags are either written into the answer as `#tag` or taken from the
+/// command's own words.
+pub struct Save {
+    pub step: SaveStep,
+    pub command: String,
+    pub purpose: String,
+    /// The history entry the command line is showing while up and down walk
+    /// through it. `None` once the line is past the newest, as in a shell.
+    pub recalled: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveStep {
+    Command,
+    Purpose,
+}
+
+impl Save {
+    fn line(&mut self) -> &mut String {
+        match self.step {
+            SaveStep::Command => &mut self.command,
+            SaveStep::Purpose => &mut self.purpose,
+        }
+    }
 }
 
 pub struct App {
@@ -93,6 +116,9 @@ pub struct App {
     history: Vec<String>,
     /// Entry the next ctrl+x will actually remove.
     armed_to_remove: Option<String>,
+    /// Set once the library file has been written, so the caller knows there
+    /// is something to sync.
+    changed: bool,
     now: i64,
 }
 
@@ -120,6 +146,7 @@ impl App {
             library,
             history: prepare_history(history),
             armed_to_remove: None,
+            changed: false,
             now,
         };
         app.reindex();
@@ -179,12 +206,6 @@ impl App {
 
         match &mut self.mode {
             Mode::Browse => self.browse_key(key, control, armed),
-            // A form showing its list is driven entirely by the list until one
-            // of its rows is taken or the list is dismissed.
-            Mode::Params { form, .. } | Mode::Save { form } if form.picking.is_some() => {
-                picker_key(form, key, control);
-                Ok(None)
-            }
             Mode::Params { .. } => self.params_key(key, control),
             Mode::Save { .. } => self.save_key(key, control),
             Mode::Edit { .. } => self.edit_key(key, control),
@@ -244,13 +265,7 @@ impl App {
                     return self.finish_params();
                 }
             }
-            KeyCode::Up => {
-                let label = form.fields[form.focused].label.clone();
-                if !form.open_picker(format!("Values for <{label}>")) {
-                    form.retreat();
-                }
-            }
-            KeyCode::BackTab => form.retreat(),
+            KeyCode::Up | KeyCode::BackTab => form.retreat(),
             KeyCode::Char('u') if control => form.clear(),
             KeyCode::Backspace => form.backspace(),
             KeyCode::Char(character) if !control => form.insert(character),
@@ -261,33 +276,64 @@ impl App {
     }
 
     fn save_key(&mut self, key: KeyEvent, control: bool) -> Result<Option<Outcome>> {
-        let Mode::Save { form } = &mut self.mode else {
+        let Mode::Save(save) = &mut self.mode else {
             return Ok(None);
         };
 
-        match key.code {
-            KeyCode::Esc => self.mode = Mode::Browse,
-            KeyCode::Enter | KeyCode::Tab | KeyCode::Down => {
-                if form.advance() {
-                    self.finish_save()?;
+        match (save.step, key.code) {
+            (_, KeyCode::Esc) => self.mode = Mode::Browse,
+            // Submits from wherever the cursor is. The checks in finish_save
+            // still apply, and send the cursor to whatever is missing.
+            (_, KeyCode::Char('s')) if control => self.finish_save()?,
+
+            (SaveStep::Command, KeyCode::Up) => self.recall(1),
+            (SaveStep::Command, KeyCode::Down) => self.recall(-1),
+            (SaveStep::Command, KeyCode::Enter | KeyCode::Tab) => {
+                if save.command.trim().is_empty() {
+                    self.status = Some(NO_COMMAND.to_string());
+                } else {
+                    save.step = SaveStep::Purpose;
                 }
             }
-            KeyCode::Up => {
-                if !form.open_picker(HISTORY_TITLE) {
-                    form.retreat();
-                }
+
+            (SaveStep::Purpose, KeyCode::Enter) => self.finish_save()?,
+            (SaveStep::Purpose, KeyCode::Up | KeyCode::BackTab) => {
+                save.step = SaveStep::Command;
             }
-            KeyCode::BackTab => form.retreat(),
-            // Submits from wherever the cursor is, rather than making the user
-            // walk the rest of the fields to reach the end.
-            KeyCode::Char('s') if control => self.finish_save()?,
-            KeyCode::Char('u') if control => form.clear(),
-            KeyCode::Backspace => form.backspace(),
-            KeyCode::Char(character) if !control => form.insert(character),
+
+            (_, KeyCode::Char('u')) if control => save.line().clear(),
+            (_, KeyCode::Backspace) => {
+                save.line().pop();
+            }
+            (_, KeyCode::Char(character)) if !control => save.line().push(character),
             _ => {}
         }
 
         Ok(None)
+    }
+
+    /// Walks the command line through the shell's history, `older` steps back.
+    ///
+    /// Past the newest entry the line is empty, the way a shell's own prompt is
+    /// when down is pressed at the bottom of its history.
+    fn recall(&mut self, older: isize) {
+        let Mode::Save(save) = &mut self.mode else {
+            return;
+        };
+
+        let next = match save.recalled {
+            Some(index) => index as isize + older,
+            None if older > 0 => 0,
+            None => return,
+        };
+
+        if next < 0 {
+            save.recalled = None;
+            save.command.clear();
+        } else if let Some(command) = self.history.get(next as usize) {
+            save.recalled = Some(next as usize);
+            save.command = command.clone();
+        }
     }
 
     fn edit_key(&mut self, key: KeyEvent, control: bool) -> Result<Option<Outcome>> {
@@ -408,75 +454,47 @@ impl App {
         }))
     }
 
-    /// Opens the save screen on the last command the shell ran.
+    /// Starts saving on the newest thing the shell has.
     ///
-    /// The rest of the history sits behind the command field rather than behind
-    /// a second chord, so saving something from further back costs a keystroke
-    /// rather than a different way in.
+    /// The shell puts whatever was on the prompt line ahead of its history, so
+    /// a command typed but not yet run is what gets offered first, and the
+    /// last one run when the line was empty.
     fn begin_save(&mut self) {
-        let saved: BTreeSet<&str> = self
-            .entries
-            .iter()
-            .filter_map(|entry| entry.cmd_for(self.family))
-            .collect();
-
-        let choices = self
-            .history
-            .iter()
-            .map(|command| {
-                let note = saved
-                    .contains(command.as_str())
-                    .then(|| ALREADY_SAVED.to_string());
-                Choice::new(command.clone(), note)
-            })
-            .collect();
-
-        let command = self.history.first().cloned().unwrap_or_default();
-        let hint = (!self.history.is_empty()).then(|| "up for history".to_string());
-
-        self.mode = Mode::Save {
-            form: Form::new(
-                "Save a command",
-                vec![
-                    Field::new("command", command)
-                        .with_hint(hint)
-                        .with_choices(choices),
-                    Field::new("description", ""),
-                    Field::new("tags", "").with_hint(Some("comma separated".to_string())),
-                ],
-            ),
-        };
+        self.mode = Mode::Save(Save {
+            step: SaveStep::Command,
+            command: self.history.first().cloned().unwrap_or_default(),
+            purpose: String::new(),
+            recalled: (!self.history.is_empty()).then_some(0),
+        });
     }
 
     fn finish_save(&mut self) -> Result<()> {
-        let Mode::Save { form } = &self.mode else {
+        let Mode::Save(save) = &mut self.mode else {
             return Ok(());
         };
 
-        let command = form.value(0).to_string();
-        let description = form.value(1).to_string();
-        let tags = definitions::parse_tags(form.value(2));
+        let command = save.command.trim().to_string();
+        let (description, given) = definitions::split_purpose(&save.purpose);
 
         if command.is_empty() {
-            self.status = Some("A command is required".to_string());
+            save.step = SaveStep::Command;
+            self.status = Some(NO_COMMAND.to_string());
             return Ok(());
         }
         // Without a description the entry is only findable by its own text,
         // which defeats the point of saving it in the first place.
         if description.is_empty() {
-            self.status = Some("A description is required to find this later".to_string());
-            if let Mode::Save { form } = &mut self.mode {
-                form.focused = 1;
-            }
+            save.step = SaveStep::Purpose;
+            self.status = Some("Say what it is for, so you can find it later".to_string());
             return Ok(());
         }
 
         let taken: BTreeSet<String> = self.entries.iter().map(|e| e.id.clone()).collect();
         let entry = NewEntry {
             id: definitions::suggest_id(&command, &taken),
+            tags: definitions::merge_tags(given, &command),
             cmd: CommandBody::Shared(command),
             desc: description,
-            tags,
             params: BTreeMap::new(),
             danger: false,
         };
@@ -492,8 +510,31 @@ impl App {
         self.reindex();
         self.select_id(&id);
         self.status = Some(format!("Saved as {id}"));
+        self.changed = true;
 
         Ok(())
+    }
+
+    /// Whether the library already holds exactly this command for this shell.
+    pub fn is_saved(&self, command: &str) -> bool {
+        let command = command.trim();
+        self.entries
+            .iter()
+            .any(|entry| entry.cmd_for(self.family) == Some(command))
+    }
+
+    /// Tags the entry being saved would get, for showing before it is saved.
+    pub fn save_tags(&self) -> Vec<String> {
+        let Mode::Save(save) = &self.mode else {
+            return Vec::new();
+        };
+        let (_, given) = definitions::split_purpose(&save.purpose);
+        definitions::merge_tags(given, save.command.trim())
+    }
+
+    /// Whether anything in the library was written while the picker was open.
+    pub fn changed(&self) -> bool {
+        self.changed
     }
 
     /// Opens the edit screen on the selected entry.
@@ -578,6 +619,7 @@ impl App {
         let shadowing = *shadowing;
 
         definitions::upsert(&self.library, &entry)?;
+        self.changed = true;
 
         self.entries = definitions::load(Some(&self.library))?;
         self.mode = Mode::Browse;
@@ -617,6 +659,7 @@ impl App {
         }
         self.stats.forget(&id)?;
 
+        self.changed = true;
         self.entries = definitions::load(Some(&self.library))?;
         self.scores = self.stats.scores(self.now)?;
         self.reindex();
@@ -686,27 +729,6 @@ impl App {
         let ranked = search::rank(&candidates, &self.scores, &self.query);
         self.order = ranked.into_iter().map(|rank| self.pickable[rank]).collect();
         self.selected = self.selected.min(self.order.len().saturating_sub(1));
-    }
-}
-
-/// Drives a form's list of offered values.
-///
-/// A free function rather than a method: the caller is already holding the form
-/// out of the mode it lives in.
-fn picker_key(form: &mut Form, key: KeyEvent, control: bool) {
-    match key.code {
-        KeyCode::Esc => form.cancel_pick(),
-        KeyCode::Enter | KeyCode::Tab => form.accept_pick(),
-
-        KeyCode::Up => form.move_pick(-1),
-        KeyCode::Down => form.move_pick(1),
-        KeyCode::PageUp => form.move_pick(-10),
-        KeyCode::PageDown => form.move_pick(10),
-
-        KeyCode::Char('u') if control => form.filter_clear(),
-        KeyCode::Backspace => form.filter_backspace(),
-        KeyCode::Char(character) if !control => form.filter_insert(character),
-        _ => {}
     }
 }
 
@@ -1007,23 +1029,31 @@ mod tests {
         assert_eq!(cursor, None);
     }
 
+    fn save_mode(app: &App) -> &Save {
+        let Mode::Save(save) = app.mode() else {
+            panic!("expected to be saving");
+        };
+        save
+    }
+
     #[test]
-    fn saving_seeds_the_form_with_the_last_command() {
+    fn saving_starts_on_the_newest_command_and_asks_what_it_is_for() {
         let mut app = sample();
         app.on_key(ctrl('s')).unwrap();
 
-        let Mode::Save { form } = app.mode() else {
-            panic!("expected the save form");
-        };
-        assert_eq!(form.fields[0].value, "kics scan -p .");
+        let save = save_mode(&app);
+        assert_eq!(save.step, SaveStep::Command);
+        assert_eq!(save.command, "kics scan -p .");
 
         app.on_key(key(KeyCode::Enter)).unwrap();
+        assert_eq!(save_mode(&app).step, SaveStep::Purpose);
+
         typed(&mut app, "Scan this project");
-        app.on_key(key(KeyCode::Enter)).unwrap();
         app.on_key(key(KeyCode::Enter)).unwrap();
 
         assert!(matches!(app.mode(), Mode::Browse));
         assert!(app.status().unwrap().contains("user.kics-scan"));
+        assert!(app.changed());
 
         // Saving reloads from disk, so the entry is now in the ranked list and
         // sitting under the cursor ready to be inserted.
@@ -1031,6 +1061,24 @@ mod tests {
         assert_eq!(saved.entry.id, "user.kics-scan");
         assert_eq!(saved.cmd, "kics scan -p .");
         assert_eq!(saved.entry.desc, "Scan this project");
+        assert_eq!(saved.entry.tags, ["kics", "scan"]);
+
+        let _ = std::fs::remove_file(&app.library);
+    }
+
+    #[test]
+    fn hashtags_in_the_answer_become_tags() {
+        let mut app = sample();
+        app.on_key(ctrl('s')).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        typed(&mut app, "Scan this project #security");
+
+        assert_eq!(app.save_tags(), ["security", "kics", "scan"]);
+        app.on_key(key(KeyCode::Enter)).unwrap();
+
+        let saved = app.selected_row().unwrap();
+        assert_eq!(saved.entry.desc, "Scan this project");
+        assert_eq!(saved.entry.tags, ["security", "kics", "scan"]);
 
         let _ = std::fs::remove_file(&app.library);
     }
@@ -1040,30 +1088,127 @@ mod tests {
         let mut app = sample();
         app.on_key(ctrl('s')).unwrap();
         app.on_key(key(KeyCode::Enter)).unwrap();
-        app.on_key(key(KeyCode::Enter)).unwrap();
+        typed(&mut app, "#only-tags");
         app.on_key(key(KeyCode::Enter)).unwrap();
 
-        assert!(matches!(app.mode(), Mode::Save { .. }));
-        assert!(app.status().unwrap().contains("description"));
+        assert_eq!(save_mode(&app).step, SaveStep::Purpose);
+        assert!(app.status().unwrap().contains("what it is for"));
+        assert!(!app.library.exists(), "an unfindable entry was written");
     }
 
-    /// The shell having nothing to offer is not an error. The field is still
+    #[test]
+    fn going_on_without_a_command_is_refused() {
+        let mut app = app_with_history(Vec::new(), Vec::new());
+        app.on_key(ctrl('s')).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+
+        assert_eq!(save_mode(&app).step, SaveStep::Command);
+        assert_eq!(app.status(), Some(NO_COMMAND));
+    }
+
+    /// The shell having nothing to offer is not an error. The line is still
     /// there to be typed into.
     #[test]
-    fn an_empty_history_still_opens_the_save_form() {
+    fn an_empty_history_still_opens_on_an_empty_line() {
         let mut app = app_with_history(
             vec![entry("git.log", "git log", "Show history")],
             Vec::new(),
         );
         app.on_key(ctrl('s')).unwrap();
 
-        let Mode::Save { form } = app.mode() else {
-            panic!("expected the save form");
-        };
-        assert_eq!(form.fields[0].value, "");
-        assert!(form.fields[0].choices.is_empty());
-        assert!(form.fields[0].hint.is_none());
+        let save = save_mode(&app);
+        assert_eq!(save.command, "");
+        assert_eq!(save.recalled, None);
         assert!(app.status().is_none());
+
+        app.on_key(key(KeyCode::Up)).unwrap();
+        assert_eq!(
+            save_mode(&app).command,
+            "",
+            "up found history that is not there"
+        );
+    }
+
+    /// The way a shell's own prompt behaves: up walks back, down walks
+    /// forward, and down past the newest leaves an empty line.
+    #[test]
+    fn up_and_down_walk_the_history_like_a_shell() {
+        let mut app = history_sample();
+        app.on_key(ctrl('s')).unwrap();
+        assert_eq!(save_mode(&app).command, "kics scan -p .");
+
+        app.on_key(key(KeyCode::Up)).unwrap();
+        assert_eq!(save_mode(&app).command, "docker compose up -d");
+        app.on_key(key(KeyCode::Up)).unwrap();
+        assert_eq!(save_mode(&app).command, "git log --oneline");
+        app.on_key(key(KeyCode::Up)).unwrap();
+        assert_eq!(
+            save_mode(&app).command,
+            "git log --oneline",
+            "ran off the end"
+        );
+
+        app.on_key(key(KeyCode::Down)).unwrap();
+        app.on_key(key(KeyCode::Down)).unwrap();
+        assert_eq!(save_mode(&app).command, "kics scan -p .");
+
+        app.on_key(key(KeyCode::Down)).unwrap();
+        let save = save_mode(&app);
+        assert_eq!(save.command, "");
+        assert_eq!(save.recalled, None);
+
+        app.on_key(key(KeyCode::Up)).unwrap();
+        assert_eq!(save_mode(&app).command, "kics scan -p .");
+    }
+
+    #[test]
+    fn a_recalled_command_can_be_edited_before_it_is_saved() {
+        let mut app = history_sample();
+        app.on_key(ctrl('s')).unwrap();
+        app.on_key(key(KeyCode::Up)).unwrap();
+        for _ in 0.."-d".len() {
+            app.on_key(key(KeyCode::Backspace)).unwrap();
+        }
+        typed(&mut app, "--build");
+
+        assert_eq!(save_mode(&app).command, "docker compose up --build");
+    }
+
+    #[test]
+    fn a_command_already_in_the_library_is_recognised() {
+        let app = history_sample();
+        assert!(app.is_saved("git log --oneline"));
+        assert!(app.is_saved("  git log --oneline "));
+        assert!(!app.is_saved("docker compose up -d"));
+    }
+
+    /// Up on the second line goes back to the first rather than into the
+    /// history, and whatever was typed as the answer is kept.
+    #[test]
+    fn up_from_the_question_returns_to_the_command() {
+        let mut app = history_sample();
+        app.on_key(ctrl('s')).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        typed(&mut app, "Scan");
+        app.on_key(key(KeyCode::Up)).unwrap();
+
+        let save = save_mode(&app);
+        assert_eq!(save.step, SaveStep::Command);
+        assert_eq!(save.command, "kics scan -p .");
+        assert_eq!(save.purpose, "Scan");
+    }
+
+    #[test]
+    fn escape_leaves_without_saving() {
+        let mut app = history_sample();
+        app.on_key(ctrl('s')).unwrap();
+        app.on_key(key(KeyCode::Enter)).unwrap();
+        typed(&mut app, "Scan this project");
+        app.on_key(key(KeyCode::Esc)).unwrap();
+
+        assert!(matches!(app.mode(), Mode::Browse));
+        assert!(!app.library.exists());
+        assert!(!app.changed());
     }
 
     #[test]
@@ -1090,110 +1235,6 @@ mod tests {
     }
 
     #[test]
-    fn up_on_the_command_field_opens_the_history() {
-        let mut app = history_sample();
-        app.on_key(ctrl('s')).unwrap();
-        app.on_key(key(KeyCode::Up)).unwrap();
-
-        let Mode::Save { form } = app.mode() else {
-            panic!("expected the save form");
-        };
-        let picker = form.picking.as_ref().expect("the history is open");
-        assert_eq!(picker.title, HISTORY_TITLE);
-        assert_eq!(picker.selected, 0);
-        assert_eq!(form.visible().len(), 3);
-    }
-
-    #[test]
-    fn a_history_entry_already_in_the_library_says_so() {
-        let mut app = history_sample();
-        app.on_key(ctrl('s')).unwrap();
-
-        let Mode::Save { form } = app.mode() else {
-            panic!("expected the save form");
-        };
-        let notes: Vec<Option<&str>> = form.fields[0]
-            .choices
-            .iter()
-            .map(|choice| choice.note.as_deref())
-            .collect();
-
-        assert_eq!(notes, vec![None, None, Some(ALREADY_SAVED)]);
-    }
-
-    #[test]
-    fn choosing_from_the_history_fills_the_command_field() {
-        let mut app = history_sample();
-        app.on_key(ctrl('s')).unwrap();
-        app.on_key(key(KeyCode::Up)).unwrap();
-        app.on_key(key(KeyCode::Down)).unwrap();
-        app.on_key(key(KeyCode::Enter)).unwrap();
-
-        let Mode::Save { form } = app.mode() else {
-            panic!("expected the save form");
-        };
-        assert!(form.picking.is_none());
-        assert_eq!(form.fields[0].value, "docker compose up -d");
-        assert_eq!(form.focused, 0, "the form stays where it was");
-    }
-
-    #[test]
-    fn escaping_the_history_leaves_the_command_field_alone() {
-        let mut app = history_sample();
-        app.on_key(ctrl('s')).unwrap();
-        app.on_key(key(KeyCode::Up)).unwrap();
-        app.on_key(key(KeyCode::Down)).unwrap();
-        app.on_key(key(KeyCode::Esc)).unwrap();
-
-        let Mode::Save { form } = app.mode() else {
-            panic!("expected the save form, not a cancelled one");
-        };
-        assert!(form.picking.is_none());
-        assert_eq!(form.fields[0].value, "kics scan -p .");
-    }
-
-    #[test]
-    fn typing_in_the_history_filters_it() {
-        let mut app = history_sample();
-        app.on_key(ctrl('s')).unwrap();
-        app.on_key(key(KeyCode::Up)).unwrap();
-        typed(&mut app, "docker");
-
-        let Mode::Save { form } = app.mode() else {
-            panic!("expected the save form");
-        };
-        assert_eq!(form.visible().len(), 1);
-
-        app.on_key(key(KeyCode::Enter)).unwrap();
-        let Mode::Save { form } = app.mode() else {
-            panic!("expected the save form");
-        };
-        assert_eq!(form.fields[0].value, "docker compose up -d");
-    }
-
-    /// Only the command field has a list, so the other two keep the movement
-    /// that key has everywhere else in the form.
-    #[test]
-    fn up_on_a_field_without_a_list_still_goes_back_a_field() {
-        let mut app = history_sample();
-        app.on_key(ctrl('s')).unwrap();
-        app.on_key(key(KeyCode::Enter)).unwrap();
-        app.on_key(key(KeyCode::Enter)).unwrap();
-
-        let Mode::Save { form } = app.mode() else {
-            panic!("expected the save form");
-        };
-        assert_eq!(form.focused, 2);
-
-        app.on_key(key(KeyCode::Up)).unwrap();
-        let Mode::Save { form } = app.mode() else {
-            panic!("expected the save form");
-        };
-        assert!(form.picking.is_none());
-        assert_eq!(form.focused, 1);
-    }
-
-    #[test]
     fn pinning_floats_an_entry_to_the_top() {
         let mut app = sample();
         typed(&mut app, "docker");
@@ -1217,7 +1258,6 @@ mod tests {
         app.on_key(ctrl('s')).unwrap();
         app.on_key(key(KeyCode::Enter)).unwrap();
         typed(app, description);
-        app.on_key(key(KeyCode::Enter)).unwrap();
         app.on_key(key(KeyCode::Enter)).unwrap();
     }
 
@@ -1311,7 +1351,7 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_s_submits_the_save_form_from_any_field() {
+    fn ctrl_s_saves_from_the_answer_line() {
         let mut app = sample();
 
         app.on_key(ctrl('s')).unwrap();
@@ -1332,8 +1372,8 @@ mod tests {
         app.on_key(ctrl('s')).unwrap();
         app.on_key(ctrl('s')).unwrap();
 
-        assert!(matches!(app.mode(), Mode::Save { .. }));
-        assert!(app.status().unwrap().contains("description"));
+        assert_eq!(save_mode(&app).step, SaveStep::Purpose);
+        assert!(app.status().unwrap().contains("what it is for"));
     }
 
     #[test]

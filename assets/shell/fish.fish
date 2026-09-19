@@ -3,9 +3,16 @@ function __lore_pick
     # child's argument list out of one string, so a command ending in a
     # backslash takes the next one with it. Every shell hands it over the same
     # way.
+    #
+    # Whatever is on the prompt line goes first, so saving offers a command
+    # typed but not yet run ahead of the ones that were.
     set -l recent (mktemp)
     set -l out (mktemp)
-    history --max 50 > $recent
+    begin
+        set -l line (commandline)
+        test -n "$line"; and printf '%s\n' $line
+        history --max 50
+    end > $recent
 
     # Deliberately not a command substitution. The picker draws a panel under
     # the prompt, which means asking the terminal where the cursor is, and that

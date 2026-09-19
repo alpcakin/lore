@@ -226,3 +226,39 @@ fn a_reader_that_stops_early_is_not_a_crash() {
     assert!(!stderr.contains("panicked"), "lore panicked: {stderr}");
     assert!(output.status.success(), "lore failed: {stderr}");
 }
+
+#[test]
+fn saving_takes_tags_from_the_command_and_the_description() {
+    let sandbox = Sandbox::new("save-tags");
+    sandbox.succeeds(&[
+        "save",
+        "kubectl logs -f api-0",
+        "--desc",
+        "Follow the api #k8s",
+        "--tags",
+        "prod",
+    ]);
+
+    let text = fs::read_to_string(sandbox.library()).expect("the library should exist");
+    assert!(text.contains("desc: Follow the api\n"), "wrote {text}");
+    for tag in ["k8s", "prod", "kubectl", "logs"] {
+        assert!(text.contains(&format!("- {tag}\n")), "no {tag} in {text}");
+    }
+}
+
+/// Without --desc the question is asked, but only of a person. A script that
+/// left it out has nobody to answer and must not hang waiting.
+#[test]
+fn saving_without_a_description_from_a_script_fails_instead_of_waiting() {
+    let sandbox = Sandbox::new("save-no-desc");
+    let output = Command::new(env!("CARGO_BIN_EXE_lore"))
+        .args(["save", "git status"])
+        .env("LORE_CONFIG_DIR", &sandbox.root)
+        .env("LORE_DATA_DIR", &sandbox.root)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("the binary should run");
+
+    assert!(!output.status.success(), "saved with no description");
+    assert!(!sandbox.library().exists(), "wrote an unfindable entry");
+}

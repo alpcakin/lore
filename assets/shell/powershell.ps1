@@ -15,6 +15,13 @@ if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
             $commands = @(Get-History -Count 50 | ForEach-Object { $_.CommandLine } | Where-Object { $_ })
             [array]::Reverse($commands)
 
+            # Whatever is on the prompt line goes first, so saving offers a
+            # command typed but not yet run ahead of the ones that were.
+            $line = $null
+            $cursor = $null
+            [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+            if ($line) { $commands = @($line) + $commands }
+
             # Explicit UTF-8 without a mark: the default here is the console
             # code page, which loses anything outside it.
             [IO.File]::WriteAllLines($recent, $commands, (New-Object Text.UTF8Encoding $false))

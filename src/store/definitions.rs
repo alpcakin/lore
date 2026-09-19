@@ -99,6 +99,90 @@ pub fn parse_tags(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Separates `#tags` from the answer to "what is it for?".
+///
+/// Saving asks one question rather than filling in a form, so tags ride along
+/// in the answer the way they do in a commit message or a post: any word that
+/// starts with `#` becomes a tag and the rest is the description.
+pub fn split_purpose(text: &str) -> (String, Vec<String>) {
+    let mut words = Vec::new();
+    let mut tags = Vec::new();
+
+    for word in text.split_whitespace() {
+        match word.strip_prefix('#') {
+            Some(tag) if !tag.is_empty() => {
+                let tag = tag.to_lowercase();
+                if !tags.contains(&tag) {
+                    tags.push(tag);
+                }
+            }
+            _ => words.push(word),
+        }
+    }
+
+    (words.join(" "), tags)
+}
+
+/// Words to know a command by, taken from the command itself.
+///
+/// The program and the subcommands that follow it, stopping at the first flag,
+/// placeholder, path or quote: `kubectl logs -f <pod>` gives `kubectl` and
+/// `logs`. That is what someone types when they half remember the command, and
+/// it saves them inventing tags for every entry.
+pub fn derive_tags(cmd: &str) -> Vec<String> {
+    /// Deep enough for `docker compose logs`, short of the arguments.
+    const DEPTH: usize = 3;
+
+    let mut words = cmd
+        .split_whitespace()
+        .skip_while(|word| matches!(*word, "sudo" | "doas") || word.contains('='));
+
+    let mut tags: Vec<String> = Vec::new();
+
+    // The program may be named by path, and the name is the part worth keeping.
+    if let Some(program) = words.next() {
+        let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+        let name = name.strip_suffix(".exe").unwrap_or(name).to_lowercase();
+        if plain(&name) {
+            tags.push(name);
+        } else {
+            return tags;
+        }
+    }
+
+    for word in words {
+        if tags.len() == DEPTH || !plain(word) {
+            break;
+        }
+        if !tags.iter().any(|tag| tag == word) {
+            tags.push(word.to_string());
+        }
+    }
+
+    tags
+}
+
+/// A word that reads as a name: lower case letters, digits and hyphens,
+/// starting with a letter, at least two long.
+fn plain(word: &str) -> bool {
+    word.len() >= 2
+        && word.starts_with(|c: char| c.is_ascii_lowercase())
+        && word
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// Tags the user gave first, then the ones the command suggests.
+pub fn merge_tags(given: Vec<String>, cmd: &str) -> Vec<String> {
+    let mut tags = given;
+    for tag in derive_tags(cmd) {
+        if !tags.contains(&tag) {
+            tags.push(tag);
+        }
+    }
+    tags
+}
+
 /// What `upsert` did to the file.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Written {
@@ -488,6 +572,70 @@ mod tests {
 
     /// The interface is ASCII only: a legacy Windows console runs on the system
     /// code page, where anything else arrives as mojibake.
+    #[test]
+    fn hashtags_in_the_purpose_become_tags() {
+        assert_eq!(
+            split_purpose("Follow the api logs #k8s #Debug"),
+            (
+                "Follow the api logs".to_string(),
+                vec!["k8s".to_string(), "debug".to_string()]
+            )
+        );
+        assert_eq!(
+            split_purpose("  Tail   the #logs log  "),
+            ("Tail the log".to_string(), vec!["logs".to_string()])
+        );
+    }
+
+    /// A lone `#` is punctuation, not an empty tag.
+    #[test]
+    fn a_bare_hash_stays_in_the_description() {
+        assert_eq!(
+            split_purpose("Issue # 42 fix"),
+            ("Issue # 42 fix".to_string(), Vec::new())
+        );
+    }
+
+    #[test]
+    fn tags_come_from_the_program_and_its_subcommands() {
+        assert_eq!(derive_tags("kubectl logs -f <pod>"), ["kubectl", "logs"]);
+        assert_eq!(
+            derive_tags("docker compose logs -f api"),
+            ["docker", "compose", "logs"]
+        );
+        assert_eq!(
+            derive_tags("git log -S\"<text>\" --oneline"),
+            ["git", "log"]
+        );
+        assert_eq!(derive_tags("ls -lah"), ["ls"]);
+    }
+
+    #[test]
+    fn tags_skip_what_is_not_the_program() {
+        assert_eq!(
+            derive_tags("sudo systemctl restart nginx"),
+            ["systemctl", "restart", "nginx"]
+        );
+        assert_eq!(derive_tags("RUST_LOG=debug cargo run"), ["cargo", "run"]);
+        assert_eq!(
+            derive_tags("/usr/local/bin/terraform plan"),
+            ["terraform", "plan"]
+        );
+        assert!(derive_tags("./deploy.sh prod").is_empty());
+        assert!(derive_tags("").is_empty());
+    }
+
+    #[test]
+    fn given_tags_come_first_and_are_not_repeated() {
+        assert_eq!(
+            merge_tags(
+                vec!["k8s".to_string(), "logs".to_string()],
+                "kubectl logs -f x"
+            ),
+            ["k8s", "logs", "kubectl"]
+        );
+    }
+
     #[test]
     fn the_builtin_library_is_ascii() {
         for (origin, source) in BUILTINS {

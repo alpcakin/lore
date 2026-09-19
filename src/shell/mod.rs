@@ -588,6 +588,41 @@ mod tests {
 
     /// The result file is the caller's to clean up, and it is one more than the
     /// history file, so both have to be named on the way out.
+    /// Saving offers what is on the prompt line before anything in the
+    /// history, which only works if every shell actually hands the line over.
+    #[test]
+    fn every_snippet_puts_the_prompt_line_ahead_of_its_history() {
+        let buffers = [
+            (Shell::Bash, "READLINE_LINE"),
+            (Shell::Zsh, "BUFFER"),
+            (Shell::Fish, "(commandline)"),
+            (Shell::PowerShell, "GetBufferState"),
+        ];
+
+        for (shell, buffer) in buffers {
+            let snippet = snippet(shell);
+            let line = snippet
+                .find(buffer)
+                .unwrap_or_else(|| panic!("{shell:?} never reads its prompt line"));
+            let history = ["fc -lnr", "history --max", "Get-History"]
+                .iter()
+                .find_map(|call| snippet.find(call))
+                .expect("every snippet reads its history");
+            let written = ["> \"$recent\"", "> $recent", "WriteAllLines"]
+                .iter()
+                .find_map(|call| snippet.find(call))
+                .expect("every snippet writes the history file");
+
+            assert!(line < written, "{shell:?} reads its prompt line too late");
+            if shell != Shell::PowerShell {
+                assert!(
+                    line < history,
+                    "{shell:?} puts its prompt line after its history"
+                );
+            }
+        }
+    }
+
     /// zle runs a widget's commands with stdin on /dev/null. The picker would
     /// fall back to /dev/tty, which macOS refuses to poll, and wait forever
     /// for a cursor position that never arrives.
