@@ -212,6 +212,18 @@ says so.
 
 Only the library is synced. Which commands you use most is kept per machine.
 
+Sync commits are made by `lore`, not by you, so saving a command does not file
+a contribution against your GitHub profile. To put your own name on them
+instead, set an identity on lore's clone of the repository:
+
+```
+git -C ~/.local/share/lore/sync config user.name "Your Name"
+git -C ~/.local/share/lore/sync config user.email "you@example.com"
+```
+
+On macOS that directory is `~/Library/Application Support/lore/sync`, and on
+Windows `%APPDATA%\lore\data\sync`.
+
 Keep the repository private. Saved commands often contain server names, user
 names and internal addresses.
 

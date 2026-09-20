@@ -46,6 +46,14 @@ const SYNCED_KEY: &str = "lore.synced";
 /// Repository `lore sync init` creates when it can do so itself.
 const REPOSITORY_NAME: &str = "lore-library";
 
+/// Who a sync commit is by, unless the user gives the clone an identity.
+///
+/// Deliberately not the user's own: see `has_identity`. The address is a
+/// reserved name that can never belong to anyone, so no GitHub account is
+/// ever credited with it.
+const COMMIT_NAME: &str = "lore";
+const COMMIT_EMAIL: &str = "lore@invalid";
+
 /// Held while a sync runs, so two can never interleave their writes.
 const LOCK: &str = ".lore-sync.lock";
 
@@ -273,7 +281,12 @@ fn sync_once(dir: &Path, mode: Mode) -> Result<Report> {
         let message = format!("Sync from {}", machine_name());
         let mut commit = git_in(Some(dir), mode);
         if !has_identity(dir, mode) {
-            commit.args(["-c", "user.name=lore", "-c", "user.email=lore@localhost"]);
+            commit.args([
+                "-c",
+                &format!("user.name={COMMIT_NAME}"),
+                "-c",
+                &format!("user.email={COMMIT_EMAIL}"),
+            ]);
         }
         commit.args(["commit", "--quiet", "--no-verify", "-m", &message]);
         checked(commit, "commit")?;
@@ -731,9 +744,19 @@ fn remote_url(dir: &Path) -> Result<String> {
     git(dir, Mode::Interactive, &["remote", "get-url", "origin"])
 }
 
+/// Whether the user has given this clone an identity of its own.
+///
+/// Only the clone's own config counts, never the identity git uses everywhere
+/// else. A sync commit is bookkeeping, and one per saved command, so putting
+/// the user's name and email on it would file every save as a contribution on
+/// their GitHub profile and fill the graph with squares that stand for
+/// nothing. Someone who wants their own name on them can say so, by setting
+/// `user.name` and `user.email` with `git config` inside the sync directory.
 fn has_identity(dir: &Path, mode: Mode) -> bool {
-    git(dir, mode, &["config", "user.email"]).is_ok_and(|email| !email.is_empty())
-        && git(dir, mode, &["config", "user.name"]).is_ok_and(|name| !name.is_empty())
+    let local = |key: &str| {
+        git(dir, mode, &["config", "--local", "--get", key]).is_ok_and(|value| !value.is_empty())
+    };
+    local("user.email") && local("user.name")
 }
 
 /// A name for this machine in commit messages, so the repository's history

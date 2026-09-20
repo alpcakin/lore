@@ -5,6 +5,15 @@ this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Sync commits are made by `lore` rather than by the user. One commit per
+  saved command, on the default branch of a repository they own, is what
+  GitHub counts as a contribution, and a profile graph filling up with saved
+  commands is not what anyone asked for. Setting `user.name` and `user.email`
+  on lore's own clone puts their name back on them
+
+
 ## [0.2.1] - 2026-09-20
 
 ### Fixed

@@ -46,6 +46,21 @@ impl World {
         self.remote.display().to_string()
     }
 
+    /// Who the repository's commits are by, newest first.
+    fn authors(&self) -> Vec<String> {
+        let output = Command::new("git")
+            .arg("--git-dir")
+            .arg(&self.remote)
+            .args(["log", "--format=%an <%ae>", "main"])
+            .output()
+            .expect("git should run");
+        assert!(output.status.success(), "nothing was pushed");
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
     /// The library as the repository holds it.
     fn published(&self) -> String {
         let output = Command::new("git")
@@ -388,4 +403,31 @@ fn a_failed_push_loses_nothing_on_the_next_sync() {
     assert!(laptop.has("user.echo-offline"), "{}", laptop.library());
     assert!(laptop.has("user.echo-meanwhile"), "{}", laptop.library());
     assert!(world.published().contains("echo offline"));
+}
+
+/// One commit per saved command, on the default branch of a repository the
+/// user owns, is exactly what GitHub counts as a contribution. Filing every
+/// save as a day's work on someone's profile is not lore's to do.
+#[test]
+fn sync_commits_are_by_lore_unless_the_clone_is_given_an_identity() {
+    let world = World::new("identity");
+    let laptop = world.machine("laptop");
+    laptop.save("echo one", "Say one");
+    laptop.ok(&["sync", "init", &world.url()]);
+
+    assert_eq!(world.authors(), ["lore <lore@invalid>"]);
+
+    git(&laptop.sync_dir(), &["config", "user.name", "A Person"]);
+    git(
+        &laptop.sync_dir(),
+        &["config", "user.email", "person@example.com"],
+    );
+    laptop.save("echo two", "Say two");
+    laptop.ok(&["sync"]);
+
+    assert_eq!(
+        world.authors().first().map(String::as_str),
+        Some("A Person <person@example.com>"),
+        "an identity set on the clone was ignored"
+    );
 }
