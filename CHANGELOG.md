@@ -5,6 +5,8 @@ this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-20
+
 ### Changed
 
 - Sync commits are made by `lore` rather than by the user. One commit per
@@ -131,7 +133,8 @@ First release.
 - `LORE_CONFIG_DIR` and `LORE_DATA_DIR` to relocate the library and the usage
   statistics, for a portable install
 
-[Unreleased]: https://github.com/alpcakin/lore/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/alpcakin/lore/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/alpcakin/lore/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/alpcakin/lore/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/alpcakin/lore/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/alpcakin/lore/compare/v0.1.1...v0.1.2
