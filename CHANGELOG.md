@@ -5,6 +5,13 @@ this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A change saved while a sync was already running waited for the next save or
+  the picker's quarter hourly refresh to reach the repository. Syncs now queue
+  instead of standing each other down
+
+
 ## [0.2.2] - 2026-09-20
 
 ### Changed

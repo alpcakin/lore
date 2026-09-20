@@ -60,6 +60,9 @@ const LOCK: &str = ".lore-sync.lock";
 /// Older than this, a lock was left by a sync that died.
 const STALE_LOCK: Duration = Duration::from_secs(120);
 
+/// How long a background sync waits for the one ahead of it.
+const BACKGROUND_WAIT: Duration = Duration::from_secs(30);
+
 /// Touched after every successful sync.
 const LAST_SYNC: &str = ".lore-last-sync";
 
@@ -178,15 +181,21 @@ pub fn run(mode: Mode) -> Result<Report> {
     }
     require_git()?;
 
-    // A background sync that finds another running leaves it to do the work.
-    // Someone who typed `lore sync` waits for it instead, then syncs again, so
-    // what they are told describes the state after both.
+    // Syncs queue rather than collide. A background sync waits its turn
+    // because the change that started it is not in the repository yet and
+    // nothing else will send it until the next save; if the wait is long
+    // enough to look like trouble it gives up quietly, and the picker's
+    // refresh will carry the change later. Someone who typed `lore sync`
+    // waits longer and is told when it is hopeless.
     let _lock = match mode {
-        Mode::Background => match Lock::take(&dir)? {
+        Mode::Background => match Lock::wait(&dir, BACKGROUND_WAIT)? {
             Some(lock) => lock,
             None => return Ok(Report::default()),
         },
-        Mode::Interactive => Lock::wait(&dir)?,
+        Mode::Interactive => match Lock::wait(&dir, STALE_LOCK)? {
+            Some(lock) => lock,
+            None => bail!("another sync has been running for two minutes, try again later"),
+        },
     };
 
     let result = sync_once(&dir, mode).or_else(|error| {
@@ -818,15 +827,15 @@ impl Lock {
 }
 
 impl Lock {
-    /// Takes the lock, waiting for a sync already holding it to finish.
-    fn wait(dir: &Path) -> Result<Self> {
+    /// Takes the lock, waiting up to `patience` for the sync ahead to finish.
+    fn wait(dir: &Path, patience: Duration) -> Result<Option<Self>> {
         let started = SystemTime::now();
         loop {
             if let Some(lock) = Self::take(dir)? {
-                return Ok(lock);
+                return Ok(Some(lock));
             }
-            if started.elapsed().is_ok_and(|waited| waited > STALE_LOCK) {
-                bail!("another sync has been running for two minutes, try again later");
+            if started.elapsed().is_ok_and(|waited| waited > patience) {
+                return Ok(None);
             }
             std::thread::sleep(Duration::from_millis(200));
         }
@@ -874,6 +883,27 @@ mod tests {
             message: "Could not resolve host".to_string(),
         });
         assert!(!is_rejected_push(&unreachable));
+    }
+
+    #[test]
+    fn waiting_for_a_held_lock_gives_up_rather_than_hanging() {
+        let dir = env::temp_dir().join(format!("lore-lock-wait-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+
+        let held = Lock::take(&dir).unwrap();
+        assert!(held.is_some());
+
+        let waited = Lock::wait(&dir, Duration::from_millis(300)).unwrap();
+        assert!(waited.is_none(), "took a lock somebody else was holding");
+
+        drop(held);
+        assert!(
+            Lock::wait(&dir, Duration::from_millis(300))
+                .unwrap()
+                .is_some()
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
