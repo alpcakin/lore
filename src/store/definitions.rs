@@ -561,9 +561,13 @@ pub fn suggest_id(cmd: &str, taken: &BTreeSet<String>) -> String {
         .filter(|word| !word.starts_with('-'))
         .take(2)
         .map(|word| {
+            // Hyphens are part of the words these commands are made of, as in
+            // `docker compose up` against `force-recreate`, and they are
+            // allowed in an id. Anything else is dropped.
             word.chars()
-                .filter(|c| c.is_ascii_alphanumeric())
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
                 .collect::<String>()
+                .trim_matches('-')
                 .to_lowercase()
         })
         .filter(|word| !word.is_empty())
@@ -822,6 +826,18 @@ mod tests {
         let original =
             "version: 1\ncommands:\n  - id: git.status\n    cmd: git status\n    desc: S\n";
         assert_eq!(with_enabled(original, "git.status"), original);
+    }
+
+    #[test]
+    fn an_id_keeps_the_hyphens_of_the_words_it_is_made_from() {
+        let taken = BTreeSet::new();
+        assert_eq!(suggest_id("echo from-a", &taken), "user.echo-from-a");
+        assert_eq!(
+            suggest_id("docker compose logs", &taken),
+            "user.docker-compose"
+        );
+        assert_eq!(suggest_id("kics scan -p .", &taken), "user.kics-scan");
+        assert_eq!(suggest_id("./deploy.sh", &taken), "user.deploysh");
     }
 
     #[test]

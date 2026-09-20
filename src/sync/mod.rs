@@ -136,34 +136,17 @@ pub fn init(url: Option<String>) -> Result<Report> {
         }
     }
 
-    let url = match url {
-        Some(url) => url,
-        None => create_repository()?,
+    let addresses = match url {
+        Some(url) => vec![url],
+        None => addresses_of(&create_repository()?)?,
     };
 
-    if dir.exists() {
-        fs::remove_dir_all(&dir).with_context(|| format!("failed to clear {}", dir.display()))?;
-    }
     if let Some(parent) = dir.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
 
-    println!("Connecting to {url}");
-    let clone = git_in(None, Mode::Interactive)
-        .arg("clone")
-        .arg("--quiet")
-        .arg(&url)
-        .arg(&dir)
-        .output()
-        .context("failed to run git")?;
-    if !clone.status.success() {
-        let _ = fs::remove_dir_all(&dir);
-        bail!(
-            "could not reach {url}: {}",
-            String::from_utf8_lossy(&clone.stderr).trim()
-        );
-    }
+    let url = connect(&dir, &addresses)?;
 
     let branch = git(
         &dir,
@@ -421,6 +404,118 @@ fn automatic_sync_is_off() -> bool {
     env::var_os(NO_AUTO_SYNC).is_some_and(|value| !value.is_empty())
 }
 
+/// Clones the first of `addresses` that git can log in to.
+///
+/// A repository has an ssh address and an https one, and which of them works
+/// depends on what the user has already set up for git rather than on what
+/// they told the GitHub CLI they prefer. Each is tried with prompting off, so
+/// one that would sit waiting for a username fails and lets the other be
+/// tried. If neither works and the GitHub CLI is there, it is asked to set up
+/// git's credentials, which is the missing piece when only https is on offer.
+fn connect(dir: &Path, addresses: &[String]) -> Result<String> {
+    let mut failures = Vec::new();
+
+    for (attempt, url) in addresses.iter().enumerate() {
+        println!("Connecting to {url}");
+        match clone(dir, url) {
+            Ok(()) => return Ok(url.clone()),
+            Err(error) => {
+                println!("  that address did not work");
+                failures.push(format!("{url}: {error}"));
+            }
+        }
+
+        // Worth one attempt at teaching git the login the GitHub CLI holds,
+        // then trying the addresses again.
+        if attempt + 1 == addresses.len() && setup_git_credentials() {
+            for url in addresses {
+                println!("Connecting to {url}");
+                if clone(dir, url).is_ok() {
+                    return Ok(url.clone());
+                }
+            }
+        }
+    }
+
+    bail!(
+        "could not reach the repository.\n  {}\n\n\
+         If you use ssh with GitHub, check that `ssh -T git@github.com` greets you. \
+         For https, `gh auth login` or a credential helper has to be set up first.",
+        failures.join("\n  ")
+    )
+}
+
+fn clone(dir: &Path, url: &str) -> Result<()> {
+    if dir.exists() {
+        fs::remove_dir_all(dir).with_context(|| format!("failed to clear {}", dir.display()))?;
+    }
+
+    // Prompting stays off even here: a clone that stops to ask for a username
+    // cannot be given up on in favour of an address that needs no password.
+    let output = git_in(None, Mode::Background)
+        .arg("clone")
+        .arg("--quiet")
+        .arg(url)
+        .arg(dir)
+        .output()
+        .context("failed to run git")?;
+
+    if !output.status.success() {
+        let _ = fs::remove_dir_all(dir);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let reason = stderr
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("git clone failed");
+        bail!("{}", reason.trim().trim_start_matches("fatal: "));
+    }
+    Ok(())
+}
+
+/// Asks the GitHub CLI to give git the login it already holds, reporting
+/// whether it could.
+fn setup_git_credentials() -> bool {
+    let done = Command::new("gh")
+        .args(["auth", "setup-git"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    if done {
+        println!("Set up git to use your GitHub CLI login");
+    }
+    done
+}
+
+/// Both addresses of a GitHub repository, the one the user prefers first.
+fn addresses_of(name: &str) -> Result<Vec<String>> {
+    let protocol = gh_output(&["config", "get", "git_protocol"]).unwrap_or_default();
+
+    let https = gh_output(&["repo", "view", name, "--json", "url", "--jq", ".url"]);
+    let ssh = gh_output(&["repo", "view", name, "--json", "sshUrl", "--jq", ".sshUrl"]);
+
+    let mut addresses: Vec<String> = if protocol == "ssh" {
+        vec![ssh, https]
+    } else {
+        vec![https, ssh]
+    }
+    .into_iter()
+    .flatten()
+    .collect();
+    addresses.dedup();
+
+    if addresses.is_empty() {
+        bail!("could not find the address of {name}");
+    }
+    Ok(addresses)
+}
+
+fn gh_output(arguments: &[&str]) -> Option<String> {
+    let output = Command::new("gh").args(arguments).output().ok()?;
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (output.status.success() && !value.is_empty()).then_some(value)
+}
+
 /// Makes a private repository with the GitHub CLI, or finds the one an earlier
 /// machine made, and returns its address.
 fn create_repository() -> Result<String> {
@@ -476,32 +571,7 @@ fn create_repository() -> Result<String> {
         println!("Created the private repository {REPOSITORY_NAME}");
     }
 
-    // The address git already knows how to log in to: whichever protocol the
-    // user told the GitHub CLI they use.
-    let protocol = Command::new("gh")
-        .args(["config", "get", "git_protocol"])
-        .output()
-        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
-        .unwrap_or_default();
-    let field = if protocol == "ssh" { "sshUrl" } else { "url" };
-
-    let view = Command::new("gh")
-        .args([
-            "repo",
-            "view",
-            REPOSITORY_NAME,
-            "--json",
-            field,
-            "--jq",
-            &format!(".{field}"),
-        ])
-        .output()
-        .context("failed to run gh")?;
-    let url = String::from_utf8_lossy(&view.stdout).trim().to_string();
-    if !view.status.success() || url.is_empty() {
-        bail!("could not find the address of {REPOSITORY_NAME}");
-    }
-    Ok(url)
+    Ok(REPOSITORY_NAME.to_string())
 }
 
 /// Saved commands often carry host names, user names and internal addresses,
