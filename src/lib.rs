@@ -9,3 +9,4 @@ pub mod shell;
 pub mod store;
 pub mod sync;
 pub mod tui;
+pub mod update;

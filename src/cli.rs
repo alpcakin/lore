@@ -16,6 +16,7 @@ use crate::store::stats::{self, Stats};
 use crate::store::{self};
 use crate::sync;
 use crate::tui::{App, Outcome};
+use crate::update;
 
 /// A command library that lives in your shell.
 #[derive(Parser)]
@@ -134,6 +135,13 @@ enum Command {
         shell: Option<Shell>,
     },
 
+    /// Look for a newer lore and remember what it found. Run by lore itself.
+    #[command(hide = true)]
+    CheckUpdate {
+        #[arg(long)]
+        background: bool,
+    },
+
     /// Keep your library the same on every machine, through a private git
     /// repository you own. Run with nothing after it to sync now.
     Sync {
@@ -201,6 +209,23 @@ impl Cli {
             Command::Rm { id } => remove(id),
             Command::List { shell } => list(family(shell)),
             Command::Sync { action, background } => run_sync(action, background),
+            Command::CheckUpdate { background } => {
+                let found = update::check();
+                // Nobody is watching the daily check, and a machine with no
+                // network is not a machine with a problem.
+                match (found, background) {
+                    (_, true) => Ok(()),
+                    (Ok(Some(version)), false) => {
+                        println!("The newest release is {version}");
+                        Ok(())
+                    }
+                    (Ok(None), false) => {
+                        println!("Could not tell what the newest release is");
+                        Ok(())
+                    }
+                    (Err(error), false) => Err(error),
+                }
+            }
         }
     }
 }
@@ -259,10 +284,15 @@ fn pick(
 
     let history = read_history(history);
     let mut app = App::new(entries, family, stats, library, history, stats::now())?;
+    // A sync that failed is about the user's own library and outranks news
+    // about a release they can install whenever they like.
     if let Some(error) = sync::last_error() {
         app.notice(format!("Sync failed: {error}. Run lore sync"));
+    } else if let Some(update) = update::notice() {
+        app.notice(update);
     }
     sync::refresh_if_stale();
+    update::refresh_in_background();
 
     let outcome = crate::tui::run(&mut app)?;
     if app.changed() {

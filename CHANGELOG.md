@@ -5,6 +5,15 @@ this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- The picker mentions a newer release once there is one, naming the command
+  that fits how lore was installed. It looks the release up in the background
+  at most once a day, says nothing for a patch release, and never installs
+  anything: lore does not replace its own binary. `LORE_NO_UPDATE_CHECK=1`
+  turns it off
+- The README says how to upgrade
+
 ### Fixed
 
 - A change saved while a sync was already running waited for the next save or
