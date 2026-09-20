@@ -135,6 +135,9 @@ enum Command {
         shell: Option<Shell>,
     },
 
+    /// Show this version, the newest release, and how to upgrade.
+    Version,
+
     /// Look for a newer lore and remember what it found. Run by lore itself.
     #[command(hide = true)]
     CheckUpdate {
@@ -209,6 +212,10 @@ impl Cli {
             Command::Rm { id } => remove(id),
             Command::List { shell } => list(family(shell)),
             Command::Sync { action, background } => run_sync(action, background),
+            Command::Version => {
+                println!("{}", update::status());
+                Ok(())
+            }
             Command::CheckUpdate { background } => {
                 let found = update::check();
                 // Nobody is watching the daily check, and a machine with no

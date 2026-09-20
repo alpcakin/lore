@@ -60,7 +60,7 @@ impl Version {
         numbers.next().is_none().then_some(version)
     }
 
-    fn this_build() -> Self {
+    pub fn this_build() -> Self {
         Self::parse(env!("CARGO_PKG_VERSION")).expect("the crate's own version should parse")
     }
 
@@ -73,6 +73,36 @@ impl Version {
     fn label(&self) -> String {
         format!("{}.{}.{}", self.major, self.minor, self.patch)
     }
+}
+
+/// What `lore version` prints: this version, the newest release, and what to
+/// do about the difference.
+pub fn status() -> String {
+    let current = Version::this_build();
+    let exe = env::current_exe().ok();
+    let latest = check().ok().flatten();
+    report(&current, latest, exe.as_deref())
+}
+
+fn report(current: &Version, latest: Option<Version>, exe: Option<&Path>) -> String {
+    let mut lines = vec![format!("lore {current}")];
+
+    match latest {
+        None => {
+            lines.push("Could not check for a newer release".to_string());
+            lines.push(format!("Releases are listed at {REPOSITORY}/releases"));
+        }
+        Some(latest) if latest > *current => {
+            lines.push(format!("The newest release is {latest}"));
+            lines.push(match exe {
+                Some(exe) => upgrade_command(exe),
+                None => format!("Upgrade from {REPOSITORY}/releases"),
+            });
+        }
+        Some(_) => lines.push("This is the newest release".to_string()),
+    }
+
+    lines.join("\n")
 }
 
 /// The line to show, or nothing at all.
@@ -247,6 +277,33 @@ mod tests {
             said(r"C:\Users\alp\scoop\apps\lore\current\lore.exe").contains("scoop update lore")
         );
         assert!(said("/home/alp/.local/bin/lore").contains("releases"));
+    }
+
+    #[test]
+    fn the_version_command_says_where_you_stand() {
+        let current = version("0.2.2");
+        let exe = Path::new("/opt/homebrew/Cellar/lore/0.2.2/bin/lore");
+
+        let behind = report(&current, Some(version("0.3.0")), Some(exe));
+        assert!(behind.starts_with("lore 0.2.2\n"), "{behind}");
+        assert!(behind.contains("newest release is 0.3.0"), "{behind}");
+        assert!(behind.contains("brew upgrade lore"), "{behind}");
+
+        // A patch release says nothing in the picker, but somebody who asked
+        // outright is told about it.
+        let patch = report(&current, Some(version("0.2.3")), Some(exe));
+        assert!(patch.contains("newest release is 0.2.3"), "{patch}");
+        assert!(patch.contains("brew upgrade lore"), "{patch}");
+
+        let current_release = report(&current, Some(current), Some(exe));
+        assert!(
+            current_release.contains("This is the newest release"),
+            "{current_release}"
+        );
+
+        let offline = report(&current, None, Some(exe));
+        assert!(offline.contains("Could not check"), "{offline}");
+        assert!(offline.contains("/releases"), "{offline}");
     }
 
     #[test]

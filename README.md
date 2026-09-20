@@ -71,6 +71,12 @@ PATH.
 
 ## Upgrading
 
+To see which version you have, whether there is a newer one, and what to run:
+
+```
+lore version
+```
+
 Whichever way you installed lore is the way to upgrade it:
 
 | Installed with       | Upgrade with                                                     |

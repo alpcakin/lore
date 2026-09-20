@@ -12,6 +12,8 @@ this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   at most once a day, says nothing for a patch release, and never installs
   anything: lore does not replace its own binary. `LORE_NO_UPDATE_CHECK=1`
   turns it off
+- `lore version` says which version you have, whether a newer one is out, and
+  the one command that upgrades your kind of install
 - The README says how to upgrade
 
 ### Fixed
