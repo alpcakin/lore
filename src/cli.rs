@@ -89,6 +89,13 @@ enum Command {
         // came next. `cd C:\\projects\\` is enough to do it.
         #[arg(long)]
         history: Option<PathBuf>,
+
+        /// File holding what was already typed at the prompt.
+        ///
+        /// It opens the picker filtered by it, and is offered first when
+        /// saving. In a file for the same reason the history is.
+        #[arg(long)]
+        line: Option<PathBuf>,
     },
 
     /// Save a command to the user library without opening the picker.
@@ -191,11 +198,13 @@ impl Cli {
                 print_cursor,
                 output,
                 history,
+                line,
             } => pick(
                 family(shell),
                 print_cursor,
                 output.as_deref(),
                 history.as_deref(),
+                line.as_deref(),
             ),
             Command::Save {
                 command,
@@ -284,13 +293,24 @@ fn pick(
     print_cursor: bool,
     output: Option<&Path>,
     history: Option<&Path>,
+    line: Option<&Path>,
 ) -> Result<()> {
     let library = store::user_library()?;
     let entries = definitions::load(Some(&library))?;
     let stats = Stats::open(&store::stats_database()?)?;
 
-    let history = read_history(history);
+    // Whatever was already typed is both what to search for and the first
+    // thing offered when saving, so it leads the history the shell handed
+    // over.
+    let typed = line.and_then(read_line);
+    let mut history = read_history(history);
+    if let Some(typed) = &typed {
+        history.insert(0, typed.clone());
+    }
     let mut app = App::new(entries, family, stats, library, history, stats::now())?;
+    if let Some(typed) = typed {
+        app.search(typed);
+    }
     // A sync that failed is about the user's own library and outranks news
     // about a release they can install whenever they like.
     if let Some(error) = sync::last_error() {
@@ -329,6 +349,13 @@ fn pick(
     }
 
     Ok(())
+}
+
+/// What the user had typed at the prompt, if anything.
+fn read_line(path: &Path) -> Option<String> {
+    let typed = fs::read_to_string(path).unwrap_or_default();
+    let typed = typed.trim();
+    (!typed.is_empty()).then(|| typed.to_string())
 }
 
 /// The shell's recent commands, or nothing at all.

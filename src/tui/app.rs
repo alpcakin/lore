@@ -532,6 +532,12 @@ impl App {
         definitions::merge_tags(given, save.command.trim())
     }
 
+    /// Opens the picker on a search already typed.
+    pub fn search(&mut self, query: String) {
+        self.query = query;
+        self.reindex();
+    }
+
     /// Shows `message` where the hints go until the first key is pressed.
     pub fn notice(&mut self, message: String) {
         self.status = Some(message);
@@ -842,6 +848,24 @@ mod tests {
         typed(&mut app, "git");
         assert_eq!(app.matches(), 1);
         assert_eq!(app.selected_row().unwrap().entry.id, "git.log");
+    }
+
+    /// Pressing ctrl+g after typing something opens the picker on it rather
+    /// than on the whole library.
+    #[test]
+    fn the_picker_can_open_on_a_search_already_typed() {
+        let mut app = sample();
+        app.search("git".to_string());
+
+        assert_eq!(app.query(), "git");
+        assert_eq!(app.matches(), 1);
+        assert_eq!(app.selected_row().unwrap().entry.id, "git.log");
+
+        // And it is an ordinary query from there on.
+        app.on_key(key(KeyCode::Backspace)).unwrap();
+        assert_eq!(app.query(), "gi");
+        app.on_key(ctrl('u')).unwrap();
+        assert_eq!(app.matches(), 3);
     }
 
     #[test]

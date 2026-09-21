@@ -588,10 +588,10 @@ mod tests {
 
     /// The result file is the caller's to clean up, and it is one more than the
     /// history file, so both have to be named on the way out.
-    /// Saving offers what is on the prompt line before anything in the
-    /// history, which only works if every shell actually hands the line over.
+    /// The picker opens on what was already typed, and offers it first when
+    /// saving, neither of which happens unless the shell hands the line over.
     #[test]
-    fn every_snippet_puts_the_prompt_line_ahead_of_its_history() {
+    fn every_snippet_hands_over_the_prompt_line() {
         let buffers = [
             (Shell::Bash, "READLINE_LINE"),
             (Shell::Zsh, "BUFFER"),
@@ -601,25 +601,21 @@ mod tests {
 
         for (shell, buffer) in buffers {
             let snippet = snippet(shell);
-            let line = snippet
+            let read = snippet
                 .find(buffer)
                 .unwrap_or_else(|| panic!("{shell:?} never reads its prompt line"));
-            let history = ["fc -lnr", "history --max", "Get-History"]
-                .iter()
-                .find_map(|call| snippet.find(call))
-                .expect("every snippet reads its history");
-            let written = ["> \"$recent\"", "> $recent", "WriteAllLines"]
-                .iter()
-                .find_map(|call| snippet.find(call))
-                .expect("every snippet writes the history file");
 
-            assert!(line < written, "{shell:?} reads its prompt line too late");
-            if shell != Shell::PowerShell {
-                assert!(
-                    line < history,
-                    "{shell:?} puts its prompt line after its history"
-                );
-            }
+            let invocation = snippet
+                .lines()
+                .find(|line| line.contains("lore pick"))
+                .unwrap_or_else(|| panic!("{shell:?} never runs the picker"));
+            assert!(
+                invocation.contains("--line"),
+                "{shell:?} does not pass the prompt line: {invocation}"
+            );
+
+            let passed = snippet.find("--line").expect("just checked");
+            assert!(read < passed, "{shell:?} reads its prompt line too late");
         }
     }
 
@@ -641,7 +637,7 @@ mod tests {
     }
 
     #[test]
-    fn every_snippet_removes_both_of_its_temporary_files() {
+    fn every_snippet_removes_all_of_its_temporary_files() {
         for shell in ALL {
             let snippet = snippet(shell);
             let cleanup = snippet
@@ -649,10 +645,19 @@ mod tests {
                 .find(|line| line.contains("rm -f") || line.contains("Remove-Item"))
                 .expect("every snippet cleans up");
 
-            assert!(
-                cleanup.contains("recent") && cleanup.contains("out"),
-                "{shell:?} leaves a temporary file behind: {cleanup}"
-            );
+            // PowerShell names the prompt line file differently, since $line
+            // is what it calls the line itself.
+            let typed = if shell == Shell::PowerShell {
+                "typed"
+            } else {
+                "line"
+            };
+            for file in ["recent", typed, "out"] {
+                assert!(
+                    cleanup.contains(file),
+                    "{shell:?} leaves its {file} file behind: {cleanup}"
+                );
+            }
         }
     }
 

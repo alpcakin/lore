@@ -1,20 +1,19 @@
 __lore_pick() {
-    local recent out offset selected
+    local recent line out offset selected
 
     # Newest first, in a file rather than in arguments: Windows rebuilds a
     # child's argument list out of one string, so a command ending in a
     # backslash takes the next one with it. Every shell hands it over the same
     # way. A multi-line command still arrives as one entry per line, which fc
     # gives no way around.
-    #
-    # Whatever is on the prompt line goes first, so saving offers a command
-    # typed but not yet run ahead of the ones that were.
     recent="$(mktemp)"
     out="$(mktemp)"
-    {
-        [[ -n "$BUFFER" ]] && print -r -- "$BUFFER"
-        fc -lnr -50 2>/dev/null | sed 's/^[[:space:]]*//'
-    } > "$recent"
+    fc -lnr -50 2>/dev/null | sed 's/^[[:space:]]*//' > "$recent"
+
+    # Whatever is already on the prompt opens the picker as a search, and is
+    # the first thing offered when saving.
+    line="$(mktemp)"
+    print -rn -- "$BUFFER" > "$line"
 
     # Deliberately not a command substitution. The picker draws a panel under
     # the prompt, which means asking the terminal where the cursor is, and that
@@ -27,12 +26,12 @@ __lore_pick() {
     # and on macOS the kernel refuses to poll that device, so the answer to
     # the cursor question would never be seen and the picker would wait for it
     # forever. $TTY is the device zsh itself is reading from.
-    lore pick --shell zsh --print-cursor --history "$recent" --output "$out" < "$TTY"
+    lore pick --shell zsh --print-cursor --history "$recent" --line "$line" --output "$out" < "$TTY"
 
     # The offset is first on a line of its own, so the command is the rest.
     offset="$(head -n 1 "$out")"
     selected="$(tail -n +2 "$out")"
-    rm -f "$recent" "$out"
+    rm -f "$recent" "$line" "$out"
 
     if [[ -n "$selected" ]]; then
         BUFFER="$selected"

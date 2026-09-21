@@ -146,6 +146,11 @@ written as `#tag` becomes a tag, and the program and its subcommands, here
 
 On the edit screen, `ctrl+s` saves from whichever field you are in.
 
+You can start typing before you open it. Type `git branch`, press `ctrl+g`,
+and the picker opens already searching for it. Carry on typing to narrow it
+further, or press `ctrl+u` to clear and see everything. Whatever you had typed
+is replaced by the command you choose, and left alone if you press `esc`.
+
 lore never runs anything. It puts the command in your prompt and pressing enter
 stays your decision.
 

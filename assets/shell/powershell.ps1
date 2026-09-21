@@ -8,6 +8,7 @@ if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
         # Blanks are dropped because Windows PowerShell removes an empty string
         # from an argument list outright.
         $recent = [IO.Path]::GetTempFileName()
+        $typed = [IO.Path]::GetTempFileName()
         $out = [IO.Path]::GetTempFileName()
         $chosen = @()
 
@@ -15,28 +16,28 @@ if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
             $commands = @(Get-History -Count 50 | ForEach-Object { $_.CommandLine } | Where-Object { $_ })
             [array]::Reverse($commands)
 
-            # Whatever is on the prompt line goes first, so saving offers a
-            # command typed but not yet run ahead of the ones that were.
-            $line = $null
-            $cursor = $null
-            [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
-            if ($line) { $commands = @($line) + $commands }
-
             # Explicit UTF-8 without a mark: the default here is the console
             # code page, which loses anything outside it.
             [IO.File]::WriteAllLines($recent, $commands, (New-Object Text.UTF8Encoding $false))
+
+            # Whatever is already on the prompt opens the picker as a search,
+            # and is the first thing offered when saving.
+            $line = $null
+            $cursor = $null
+            [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+            [IO.File]::WriteAllText($typed, [string]$line, (New-Object Text.UTF8Encoding $false))
 
             # The result is deliberately not assigned from the call. The picker
             # asks the terminal where the cursor is on stdout, and a captured
             # stdout swallows the question. It comes back in a file instead, and
             # is read as UTF-8 for the same reason it was written as UTF-8.
-            & lore pick --shell powershell --print-cursor --history $recent --output $out
+            & lore pick --shell powershell --print-cursor --history $recent --line $typed --output $out
 
             if ($LASTEXITCODE -eq 0) {
                 $chosen = @([IO.File]::ReadAllLines($out, (New-Object Text.UTF8Encoding $false)))
             }
         } finally {
-            Remove-Item $recent, $out -Force -ErrorAction SilentlyContinue
+            Remove-Item $recent, $typed, $out -Force -ErrorAction SilentlyContinue
         }
 
         # The picker draws over the prompt and erases it on the way out, leaving

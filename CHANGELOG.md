@@ -5,6 +5,13 @@ this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- The picker opens on what you had already typed. Type `git branch`, press
+  `ctrl+g`, and it is searching for that, rather than making you type it a
+  second time. The same text is still what saving offers first
+
+
 ## [0.3.0] - 2026-09-20
 
 ### Added
