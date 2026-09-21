@@ -180,6 +180,10 @@ Every word has to appear somewhere in the command, its description or its
 tags, so `docker log` finds `docker logs`. Nothing is guessed: a typo matches
 nothing and says so.
 
+A broad search stops after ten matches and says how many more there are, so a
+whole namespace never rolls past your prompt. `--all` prints every one, and so
+does piping the output into something else.
+
 `-1` prints the best match's command and nothing else, for use in a pipeline
 or inside another command:
 

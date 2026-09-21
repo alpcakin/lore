@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -155,6 +155,10 @@ enum Command {
         #[arg(long, short = '1')]
         first: bool,
 
+        /// Print every match, however many there are.
+        #[arg(long, short = 'a')]
+        all: bool,
+
         /// Shell to resolve command variants for.
         #[arg(long)]
         shell: Option<Shell>,
@@ -246,11 +250,12 @@ impl Cli {
             Command::Find {
                 words,
                 first,
+                all,
                 shell,
-            } => find(&words.join(" "), first, family(shell)),
+            } => find(&words.join(" "), first, all, family(shell)),
             // Anything that is not a command at all, such as `lore docker
             // logs`, searches for it.
-            Command::Search(words) => find(&words.join(" "), false, family(None)),
+            Command::Search(words) => find(&words.join(" "), false, false, family(None)),
             Command::Version => {
                 println!("{}", update::status());
                 Ok(())
@@ -453,8 +458,6 @@ fn save(command: String, desc: Option<String>, tags: Option<String>) -> Result<(
 /// Refuses rather than waiting when there is nobody to answer, so a script
 /// that forgot an argument fails instead of hanging.
 fn ask(question: &str) -> Result<String> {
-    use std::io::IsTerminal;
-
     if !io::stdin().is_terminal() {
         bail!("pass --desc to say what the command is for");
     }
@@ -557,7 +560,22 @@ fn remove(id: String) -> Result<()> {
 ///
 /// Exits as a search does when it finds nothing, so a pipeline can tell the
 /// difference between no answer and an empty one.
-fn find(query: &str, first: bool, family: ShellFamily) -> Result<()> {
+/// How many matches to print of `total`.
+///
+/// Everything when asked for, and everything when the output is going
+/// somewhere other than a person, such as into grep.
+fn showing(total: usize, all: bool, to_a_terminal: bool) -> usize {
+    /// Enough to see the shape of the answer without losing the prompt.
+    const CAP: usize = 10;
+
+    if all || !to_a_terminal {
+        total
+    } else {
+        total.min(CAP)
+    }
+}
+
+fn find(query: &str, first: bool, all: bool, family: ShellFamily) -> Result<()> {
     let library = store::user_library().ok();
     let entries = definitions::load(library.as_deref())?;
     let stats = Stats::open(&store::stats_database()?).ok();
@@ -584,13 +602,19 @@ fn find(query: &str, first: bool, family: ShellFamily) -> Result<()> {
         return Ok(out.flush()?);
     }
 
+    // A word like `git` matches most of a namespace, and a page of matches
+    // rolling past is no answer at all. Whatever reads the output in a
+    // pipeline wants all of them, so the cap is for people only.
+    let showing = showing(ranked.len(), all, io::stdout().is_terminal());
+
     let width = ranked
         .iter()
+        .take(showing)
         .map(|&index| candidates[index].entry.id.chars().count())
         .max()
         .unwrap_or(0);
 
-    for index in ranked {
+    for &index in ranked.iter().take(showing) {
         let candidate = candidates[index];
         writeln!(
             out,
@@ -605,6 +629,14 @@ fn find(query: &str, first: bool, family: ShellFamily) -> Result<()> {
             "",
             candidate.entry.desc,
             width = width
+        )?;
+    }
+
+    let hidden = ranked.len() - showing;
+    if hidden > 0 {
+        writeln!(
+            out,
+            "\n{hidden} more. Add a word to narrow it, or pass --all"
         )?;
     }
 
@@ -651,6 +683,16 @@ fn print(out: &mut impl Write, entry: &Entry, family: ShellFamily) -> io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A page of matches rolling past is no answer, but a pipeline wants
+    /// every one of them.
+    #[test]
+    fn matches_are_capped_for_a_person_and_never_for_a_pipeline() {
+        assert_eq!(showing(40, false, true), 10);
+        assert_eq!(showing(3, false, true), 3);
+        assert_eq!(showing(40, true, true), 40, "--all was ignored");
+        assert_eq!(showing(40, false, false), 40, "a pipeline was cut short");
+    }
 
     fn history_of(arguments: &[&str]) -> Option<PathBuf> {
         match Cli::try_parse_from(arguments)
