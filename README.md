@@ -38,7 +38,12 @@ needs administrator rights except where a step says so.
    lore setup
    ```
    It shows the one line it will add to your profile and asks first.
-3. **Open a new terminal window.** The change only reaches new shells.
+3. Load the change into this window. It only reaches shells that start after
+   it, so either run this (on Linux with bash, use `~/.bashrc`):
+   ```
+   source ~/.zshrc
+   ```
+   or open a new terminal window.
 4. Press `ctrl+g`, type a few letters of what you want, press `enter`.
 
 </details>
@@ -56,14 +61,18 @@ needs administrator rights except where a step says so.
    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
    ```
    On Linux with bash, use `~/.bashrc` instead of `~/.zshrc`.
-3. **Open a new terminal window**, so the line above takes effect.
+3. Load that into this window, or `lore` will still be "not found" here (on
+   Linux with bash, use `~/.bashrc`):
+   ```
+   source ~/.zshrc
+   ```
 4. Add the keybinding to your shell:
    ```
    lore setup
    ```
    It shows the one line it will add to your profile and asks first.
-5. **Open another new terminal window**, then press `ctrl+g`, type a few
-   letters of what you want, press `enter`.
+5. Load that too (`source ~/.zshrc` again, or open a new terminal window),
+   then press `ctrl+g`, type a few letters of what you want, press `enter`.
 
 </details>
 
@@ -112,7 +121,9 @@ needs administrator rights except where a step says so.
    ```
    lore setup
    ```
-3. **Open a new terminal window**, then press `ctrl+g`.
+3. Load the change into this window with `source ~/.zshrc` (on Linux with
+   bash, `~/.bashrc`), or open a new terminal window.
+4. Press `ctrl+g`.
 
 </details>
 
@@ -124,8 +135,9 @@ needs administrator rights except where a step says so.
 Either lore did not install, or your shell does not know where it is.
 
 - Installed with the curl line: run `~/.local/bin/lore version`. If that
-  prints a version, lore is installed and only your PATH is missing. Do step 2
-  and 3 of the curl box above.
+  prints a version, lore is installed and only your PATH is missing. Do steps 2
+  and 3 of the curl box above. If you already did, you are in a window that was
+  open before you did: run `source ~/.zshrc` or open a new one.
 - Installed with Homebrew: run `brew list lore`. If it says there is no such
   formula, the install did not finish. Run `brew install alpcakin/tap/lore`
   again and read what it says.
@@ -135,8 +147,9 @@ Either lore did not install, or your shell does not know where it is.
 <details>
 <summary><b>I pressed <code>ctrl+g</code> and nothing happens</b></summary>
 
-Open a new terminal window. `lore setup` only changes shells started after it
-ran. If it still does nothing, run `lore setup` again and read what it says.
+Run `source ~/.zshrc` (on Linux with bash, `~/.bashrc`) or open a new terminal
+window. `lore setup` only changes shells started after it ran. If it still does
+nothing, run `lore setup` again and read what it says.
 
 </details>
 
