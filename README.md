@@ -21,8 +21,11 @@ What do you want to do?
 
 ### Install lore, step by step
 
-Open the box that matches you. Every step is in it, in order, and nothing
-needs administrator rights except where a step says so.
+Open the box that matches you. Every step is in it, in order.
+
+Nothing here needs administrator rights, and everything installs under your home
+directory. Every route that installs for you checks the archive against the
+sha256 published with the release and refuses anything that does not match.
 
 <details>
 <summary><b>Mac or Linux, and I use Homebrew</b></summary>
@@ -127,6 +130,24 @@ needs administrator rights except where a step says so.
 
 </details>
 
+<details>
+<summary><b>I want to download it myself</b></summary>
+
+1. Every release carries an archive for Windows, macOS on Intel and Apple
+   silicon, and Linux on x86_64 and arm64, plus a statically linked build that
+   runs on any Linux whatever its glibc. Download the one for your system from
+   the [releases page](https://github.com/alpcakin/lore/releases).
+2. Check it against the `SHA256SUMS` published beside it.
+3. Unpack it and put `lore` in a folder that is on your PATH.
+4. Add the keybinding:
+   ```
+   lore setup
+   ```
+5. Load the change into this window with `source ~/.zshrc` (on Linux with
+   bash, `~/.bashrc`), or open a new terminal window, then press `ctrl+g`.
+
+</details>
+
 ### Troubleshooting
 
 <details>
@@ -168,7 +189,7 @@ Then run the `brew install` line again.
 
 </details>
 
-Everything below is the full reference for the same things, plus how lore works.
+Everything below explains how lore works and how to use it.
 
 ## The problem
 
@@ -180,55 +201,6 @@ between machines, between sessions, or behind four hundred `cd ..` entries.
 
 History is a log. What you want is a library: curated, described in words you
 would actually search for, versioned in git, and open one keystroke away.
-
-## Install
-
-Nothing here needs administrator rights. Everything installs under your home
-directory. Every route that installs for you checks the archive against the
-sha256 published with the release and refuses anything that does not match.
-
-**Shell installer (macOS and Linux)**
-
-```
-curl -fsSL https://raw.githubusercontent.com/alpcakin/lore/main/packaging/install.sh | sh
-```
-
-**Shell installer (Windows, PowerShell)**
-
-```
-irm https://raw.githubusercontent.com/alpcakin/lore/main/packaging/install.ps1 | iex
-```
-
-Both put the binary under your home directory and tell you if that directory
-is not on your PATH yet.
-
-**macOS and Linux (Homebrew)**
-
-```
-brew install alpcakin/tap/lore
-```
-
-**Windows (Scoop)**
-
-```
-scoop bucket add alpcakin https://github.com/alpcakin/scoop-bucket
-scoop install lore
-```
-
-**Cargo**
-
-```
-cargo install cmdlore
-```
-
-**Prebuilt binaries**
-
-Every release carries an archive for Windows, macOS on Intel and Apple silicon,
-and Linux on x86_64 and arm64, plus a statically linked build that runs on any
-Linux whatever its glibc. Download one from the
-[releases page](https://github.com/alpcakin/lore/releases), check it against the
-`SHA256SUMS` published beside it, unpack it, and put `lore` somewhere on your
-PATH.
 
 ## Upgrading
 
