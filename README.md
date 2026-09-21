@@ -9,6 +9,154 @@ what you are trying to do, and the command lands in your prompt ready to run.
 
 ![lore in a terminal](docs/demo.gif)
 
+## Start here
+
+What do you want to do?
+
+- **Install lore** → [pick your system below](#install-lore-step-by-step)
+- **Use my library on a second machine or a server** → [Using lore on more than one machine](#using-lore-on-more-than-one-machine)
+- **Upgrade** → [Upgrading](#upgrading)
+- **Something did not work** → [Troubleshooting](#troubleshooting)
+- **Remove lore** → [Uninstall](#uninstall)
+
+### Install lore, step by step
+
+Open the box that matches you. Every step is in it, in order, and nothing
+needs administrator rights except where a step says so.
+
+<details>
+<summary><b>Mac or Linux, and I use Homebrew</b></summary>
+
+1. Install it:
+   ```
+   brew install alpcakin/tap/lore
+   ```
+   If Homebrew says your Command Line Tools are outdated, it prints the command
+   to fix that. Run it, then run the line above again.
+2. Add the keybinding to your shell:
+   ```
+   lore setup
+   ```
+   It shows the one line it will add to your profile and asks first.
+3. **Open a new terminal window.** The change only reaches new shells.
+4. Press `ctrl+g`, type a few letters of what you want, press `enter`.
+
+</details>
+
+<details>
+<summary><b>Mac or Linux, and I do not use Homebrew</b></summary>
+
+1. Install it:
+   ```
+   curl -fsSL https://raw.githubusercontent.com/alpcakin/lore/main/packaging/install.sh | sh
+   ```
+2. Tell your shell where it went. The installer puts `lore` in `~/.local/bin`,
+   which a new Mac does not look in. On a Mac (zsh):
+   ```
+   echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+   ```
+   On Linux with bash, use `~/.bashrc` instead of `~/.zshrc`.
+3. **Open a new terminal window**, so the line above takes effect.
+4. Add the keybinding to your shell:
+   ```
+   lore setup
+   ```
+   It shows the one line it will add to your profile and asks first.
+5. **Open another new terminal window**, then press `ctrl+g`, type a few
+   letters of what you want, press `enter`.
+
+</details>
+
+<details>
+<summary><b>Windows, and I use Scoop</b></summary>
+
+1. Install it:
+   ```
+   scoop bucket add alpcakin https://github.com/alpcakin/scoop-bucket
+   scoop install lore
+   ```
+2. Add the keybinding to PowerShell:
+   ```
+   lore setup
+   ```
+3. **Open a new PowerShell window**, then press `ctrl+g`.
+
+</details>
+
+<details>
+<summary><b>Windows, and I do not use Scoop</b></summary>
+
+1. In PowerShell, install it:
+   ```
+   irm https://raw.githubusercontent.com/alpcakin/lore/main/packaging/install.ps1 | iex
+   ```
+   It adds itself to your PATH.
+2. **Open a new PowerShell window.**
+3. Add the keybinding:
+   ```
+   lore setup
+   ```
+4. **Open one more new PowerShell window**, then press `ctrl+g`.
+
+</details>
+
+<details>
+<summary><b>I have Rust</b></summary>
+
+1. Install it:
+   ```
+   cargo install cmdlore
+   ```
+   Make sure `~/.cargo/bin` is on your PATH.
+2. Add the keybinding:
+   ```
+   lore setup
+   ```
+3. **Open a new terminal window**, then press `ctrl+g`.
+
+</details>
+
+### Troubleshooting
+
+<details>
+<summary><b><code>lore: command not found</code></b></summary>
+
+Either lore did not install, or your shell does not know where it is.
+
+- Installed with the curl line: run `~/.local/bin/lore version`. If that
+  prints a version, lore is installed and only your PATH is missing. Do step 2
+  and 3 of the curl box above.
+- Installed with Homebrew: run `brew list lore`. If it says there is no such
+  formula, the install did not finish. Run `brew install alpcakin/tap/lore`
+  again and read what it says.
+
+</details>
+
+<details>
+<summary><b>I pressed <code>ctrl+g</code> and nothing happens</b></summary>
+
+Open a new terminal window. `lore setup` only changes shells started after it
+ran. If it still does nothing, run `lore setup` again and read what it says.
+
+</details>
+
+<details>
+<summary><b>Homebrew says my Command Line Tools are outdated</b></summary>
+
+Homebrew stops until they are updated. It prints the exact command; on most
+Macs it is:
+
+```
+sudo rm -rf /Library/Developer/CommandLineTools
+sudo xcode-select --install
+```
+
+Then run the `brew install` line again.
+
+</details>
+
+Everything below is the full reference for the same things, plus how lore works.
+
 ## The problem
 
 The commands worth keeping are the ones you write once every few months: the
