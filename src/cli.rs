@@ -9,6 +9,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
 use crate::model::{CommandBody, Entry, Layer, ShellFamily};
+use crate::search::{self, Candidate};
 use crate::shell::chord::{self, Chord};
 use crate::shell::{self, Shell};
 use crate::store::definitions::{self, NewEntry, Written};
@@ -20,7 +21,9 @@ use crate::update;
 
 /// A command library that lives in your shell.
 #[derive(Parser)]
-#[command(name = "lore", version, about)]
+// Words that are not a command are a search, so a half remembered command is
+// answered rather than refused, and a mistyped one searches instead of failing.
+#[command(name = "lore", version, about, allow_external_subcommands = true)]
 pub struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -142,8 +145,27 @@ enum Command {
         shell: Option<Shell>,
     },
 
+    /// Find commands in your library without opening the picker.
+    Find {
+        /// Words to look for, in the command, its description or its tags.
+        #[arg(required = true)]
+        words: Vec<String>,
+
+        /// Print only the best match's command, and nothing else.
+        #[arg(long, short = '1')]
+        first: bool,
+
+        /// Shell to resolve command variants for.
+        #[arg(long)]
+        shell: Option<Shell>,
+    },
+
     /// Show this version, the newest release, and how to upgrade.
     Version,
+
+    /// Words that are not a command at all, taken as a search.
+    #[command(external_subcommand)]
+    Search(Vec<String>),
 
     /// Look for a newer lore and remember what it found. Run by lore itself.
     #[command(hide = true)]
@@ -221,6 +243,14 @@ impl Cli {
             Command::Rm { id } => remove(id),
             Command::List { shell } => list(family(shell)),
             Command::Sync { action, background } => run_sync(action, background),
+            Command::Find {
+                words,
+                first,
+                shell,
+            } => find(&words.join(" "), first, family(shell)),
+            // Anything that is not a command at all, such as `lore docker
+            // logs`, searches for it.
+            Command::Search(words) => find(&words.join(" "), false, family(None)),
             Command::Version => {
                 println!("{}", update::status());
                 Ok(())
@@ -523,6 +553,64 @@ fn remove(id: String) -> Result<()> {
 /// Through a writer that returns its errors rather than `println!`, which
 /// panics when the reader goes away. `lore list | head` closes the pipe after
 /// ten lines, and that has to end the listing quietly: see `main`.
+/// Prints the entries matching `query`, best first.
+///
+/// Exits as a search does when it finds nothing, so a pipeline can tell the
+/// difference between no answer and an empty one.
+fn find(query: &str, first: bool, family: ShellFamily) -> Result<()> {
+    let library = store::user_library().ok();
+    let entries = definitions::load(library.as_deref())?;
+    let stats = Stats::open(&store::stats_database()?).ok();
+    let scores = stats
+        .map(|stats| stats.scores(stats::now()))
+        .transpose()?
+        .unwrap_or_default();
+
+    let candidates: Vec<Candidate<'_>> = entries
+        .iter()
+        .filter_map(|entry| entry.cmd_for(family).map(|cmd| Candidate { entry, cmd }))
+        .collect();
+
+    let ranked = search::rank(&candidates, &scores, query);
+    let Some(&best) = ranked.first() else {
+        bail!("nothing in your library matches `{query}`");
+    };
+
+    let mut out = io::BufWriter::new(io::stdout().lock());
+
+    // One command and nothing else, so it can be used as an argument.
+    if first {
+        writeln!(out, "{}", candidates[best].cmd)?;
+        return Ok(out.flush()?);
+    }
+
+    let width = ranked
+        .iter()
+        .map(|&index| candidates[index].entry.id.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    for index in ranked {
+        let candidate = candidates[index];
+        writeln!(
+            out,
+            "{:width$}  {}",
+            candidate.entry.id,
+            candidate.cmd,
+            width = width
+        )?;
+        writeln!(
+            out,
+            "{:width$}  {}",
+            "",
+            candidate.entry.desc,
+            width = width
+        )?;
+    }
+
+    Ok(out.flush()?)
+}
+
 fn list(family: ShellFamily) -> Result<()> {
     let library = store::user_library().ok();
     let entries = definitions::load(library.as_deref())?;

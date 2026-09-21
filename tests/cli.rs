@@ -262,3 +262,57 @@ fn saving_without_a_description_from_a_script_fails_instead_of_waiting() {
     assert!(!output.status.success(), "saved with no description");
     assert!(!sandbox.library().exists(), "wrote an unfindable entry");
 }
+
+#[test]
+fn finding_prints_the_matches_best_first() {
+    let sandbox = Sandbox::new("find");
+    let found = sandbox.succeeds(&["find", "--shell", "bash", "docker", "logs"]);
+
+    assert!(found.contains("docker.logs"), "found {found}");
+    assert!(
+        found.contains("Watch what a container is printing"),
+        "the description is missing: {found}"
+    );
+    assert!(
+        !found.contains("git."),
+        "an entry matching neither word was listed: {found}"
+    );
+}
+
+/// The form a pipeline uses: one command, nothing around it.
+#[test]
+fn finding_the_first_match_prints_the_command_alone() {
+    let sandbox = Sandbox::new("find-first");
+    let found = sandbox.succeeds(&["find", "-1", "--shell", "bash", "docker", "logs"]);
+
+    assert_eq!(found.lines().count(), 1, "found {found}");
+    assert!(found.starts_with("docker logs"), "found {found}");
+}
+
+/// Half a remembered command is a search, not a mistake, and a mistyped
+/// command searches rather than being refused outright.
+#[test]
+fn words_that_are_not_a_command_are_searched_for() {
+    let sandbox = Sandbox::new("bare-words");
+    let found = sandbox.succeeds(&["kubectl", "logs"]);
+    assert!(found.contains("k8s.logs.follow"), "found {found}");
+
+    let nothing = sandbox.run(&["dcoker"]);
+    assert!(
+        !nothing.status.success(),
+        "a search with no match succeeded"
+    );
+    assert!(!sandbox.library().exists(), "a search wrote something");
+}
+
+/// The commands lore has always had must not become search terms.
+#[test]
+fn a_real_command_is_never_taken_for_a_search() {
+    let sandbox = Sandbox::new("not-a-search");
+
+    let listed = sandbox.succeeds(&["list", "--shell", "bash"]);
+    assert!(listed.contains("archive.tar.create"), "listed {listed}");
+
+    let version = sandbox.succeeds(&["version"]);
+    assert!(version.starts_with("lore "), "said {version}");
+}

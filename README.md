@@ -159,7 +159,36 @@ placeholder arrives with the gap already open and the cursor in it, so you can
 finish it with your shell's own completion. Commands with more placeholders ask
 for the values and remember what you typed last time.
 
-Nothing here needs the picker:
+Nothing here needs the picker. To search from the command line:
+
+```
+$ lore find docker logs
+docker.logs          docker logs -f --tail <lines:100> <container>
+                     Watch what a container is printing right now
+docker.compose.logs  docker compose logs -f --tail <lines:100> <service>
+                     Follow one service without the rest of the stack drowning it out
+```
+
+Words that are not one of lore's own commands are searched for too, so half a
+remembered command is answered rather than refused:
+
+```
+lore docker logs
+```
+
+Every word has to appear somewhere in the command, its description or its
+tags, so `docker log` finds `docker logs`. Nothing is guessed: a typo matches
+nothing and says so.
+
+`-1` prints the best match's command and nothing else, for use in a pipeline
+or inside another command:
+
+```
+$ lore find -1 curl timing
+curl -w "dns %{time_namelookup}s ..." -o /dev/null -s <url>
+```
+
+The rest of the library is managed the same way:
 
 ```
 lore save "kubectl logs -f <pod>" --desc "Follow a pod's logs #k8s"

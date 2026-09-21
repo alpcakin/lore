@@ -7,6 +7,10 @@ this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `lore find docker logs` searches the library from the command line, and
+  `-1` prints the best match's command alone for use in a pipeline. Words that
+  are not one of lore's own commands are searched for as well, so `lore docker
+  logs` works and a mistyped command searches rather than being refused
 - The picker opens on what you had already typed. Type `git branch`, press
   `ctrl+g`, and it is searching for that, rather than making you type it a
   second time. The same text is still what saving offers first
