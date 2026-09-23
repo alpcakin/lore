@@ -1,0 +1,12 @@
+[book]
+title = "lore"
+authors = ["Alp Cakin"]
+description = "A command library that lives in your shell."
+src = "src"
+language = "en"
+
+[output.html]
+git-repository-url = "https://github.com/alpcakin/lore"
+edit-url-template = "https://github.com/alpcakin/lore/edit/main/book/{path}"
+default-theme = "light"
+preferred-dark-theme = "navy"

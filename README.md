@@ -7,6 +7,8 @@
 A command library that lives in your shell. Press `ctrl+g`, type a few letters of
 what you are trying to do, and the command lands in your prompt ready to run.
 
+Full documentation: **https://www.alpcakin.com/lore/**
+
 ![lore in a terminal](docs/demo.gif)
 
 ## Start here
