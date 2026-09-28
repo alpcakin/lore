@@ -722,6 +722,25 @@ mod tests {
         }
     }
 
+    /// `BUILTINS` is kept by hand, so a file added to `assets/builtins` and not
+    /// to the list compiles, passes every other test, and never ships.
+    #[test]
+    fn every_builtin_file_is_listed() {
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/builtins");
+        let listed: BTreeSet<&str> = BUILTINS.iter().map(|(origin, _)| *origin).collect();
+
+        for file in fs::read_dir(&directory).unwrap() {
+            let name = file.unwrap().file_name().into_string().unwrap();
+            if name.ends_with(".yaml") {
+                let origin = format!("builtin:{name}");
+                assert!(
+                    listed.contains(origin.as_str()),
+                    "{name} is in assets/builtins but not in BUILTINS"
+                );
+            }
+        }
+    }
+
     /// A description is the only thing most searches match against, and a tag
     /// list is what makes an entry findable under a word it does not contain.
     #[test]

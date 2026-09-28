@@ -51,6 +51,10 @@ Builtins live in `assets/builtins`, one YAML file per tool. Add yours to the
 file for its tool, next to the entries it is closest to. The format is
 documented in [docs/schema.md](docs/schema.md).
 
+A tool with no file yet needs one, and the file has to be listed in `BUILTINS`
+in `src/store/definitions.rs`, one `builtin!("name")` line each in alphabetical
+order. A test fails when a file in `assets/builtins` is missing from that list.
+
 ```yaml
   - id: git.stash.pop
     cmd: git stash pop
